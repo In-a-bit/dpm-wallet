@@ -1,6 +1,6 @@
 # DPM Wallet (dpmw) — Technical Specification
 
-Version: 0.1 (draft) · Status: for review · Owner: Plaee DPM
+Version: 0.2 (draft) · Status: for review · Owner: Plaee DPM
 
 ---
 
@@ -13,76 +13,98 @@ The DPM Wallet (`dpmw`) is a lightweight, operator-hosted TypeScript service tha
 
 It is delivered as a single Docker image that each operator runs inside their own infrastructure. The only caller into the `dpmw` is the operator's backend (the "Operator DPM Gateway"). The `dpmw` never talks to Plaee except for one read-only call needed to assemble a meta-transaction (see [Section 5](#5-trust-boundary-and-outbound-dependencies)).
 
-Key custody is pluggable. In **self-custody (mnemonic) mode** the service generates a BIP-39 mnemonic on first run and derives every address from it. In **Turnkey mode** the private keys live in the Turnkey TEE and the service asks Turnkey to sign. Both modes sit behind one interface, so a third provider (e.g. Fireblocks) can be added without touching business logic.
+It signs **agnostically**. The `dpmw` has no view of balances and performs no balance reads, monitoring, or validation: it signs what the operator asks it to sign, with the parameters the operator supplies. Whether a signed artefact is economically valid — funded, within limits, against a real position — is the operator's and Plaee's concern, not the `dpmw`'s.
+
+Key custody sits behind one pluggable interface, but **phase 1 ships Turnkey only**: private keys live in the Turnkey TEE and the service asks Turnkey to sign, holding no key material of its own. A self-custody (mnemonic) mode or a different provider (e.g. Fireblocks) drops in behind the same interface later without touching business logic (see [Section 13](#13-deferred-capabilities)).
 
 The service is built on top of the existing `dpm-sdk` rather than reimplementing any cryptography. All EIP-712 order construction, proxy-call encoding, and RelayHub struct hashing is reused from the SDK, which is vendored into the image.
 
 ---
 
+
+
 ## 2. Goals and non-goals
+
+
 
 ### 2.1 Goals (v1)
 
-- Generate and persist a **master wallet**, an **operational wallet**, and any number of **customer wallets**.
-- Derive and return each customer's **on-chain proxy wallet address** without a chain round-trip.
+- Generate and persist a **master wallet** and any number of **user wallets**.
+- Derive and return each user wallet's **on-chain proxy wallet address** without a chain round-trip.
 - Sign **CLOB orders** (EIP-712) and return the signed order to the operator.
 - Build and sign **proxy meta-transactions** — USDC/CTF allowance, redeem, proxy withdrawal, split, merge — and return a ready-to-submit request body to the operator.
-- Sign **raw treasury transactions** (master ↔ operational rebalancing, master → external) and return the signed transaction hex.
-- Maintain a **secure address directory** (customer reference → EOA → proxy → derivation index) in an embedded database.
+- Sign **raw treasury transactions** (master ↔ user wallet rebalancing, master → external) and return the signed transaction hex.
+- Maintain a **secure address directory** (wallet reference → EOA → proxy → derivation index) in an embedded database.
 - Authenticate every inbound request from the operator with an **API key**.
 - Emit **structured audit logs** for every address creation and signing action.
 
-### 2.2 Non-goals (v1 — stubbed interfaces only)
 
-These appear in the product PDF but are explicitly deferred. The spec defines the interface seams so they drop in later without redesign.
 
-- **On-chain deposit/withdrawal monitoring** (Polygon watcher, confirmations, balance tracking).
+### 2.2 Non-goals (v1 — deferred, not stubbed)
+
+These appear in the product PDF but are explicitly deferred. Where the `dpmw` will eventually own the capability, the interface seam already exists so it drops in later without redesign; where it will not, the work belongs elsewhere (see §2.3).
+
+- **Self-custody (mnemonic) vault mode.** Phase 1 is Turnkey-only; the `KeyVault` port ([Section 6.2](#62-the-keyvault-port)) is the seam a mnemonic vault drops into later.
 - **Per-user** `recipientId` **trading ledger** (orders/fills/positions per customer).
 - **WebSocket event streaming** to PlaeeOS.
 - **Broadcasting** any transaction to Polygon. The `dpmw` signs; the operator (or Plaee) broadcasts. The single exception discussed for treasury is still sign-only in v1 — the signed hex is returned, not sent.
 
+
+
 ### 2.3 Explicitly out of scope forever
 
 - Submitting orders or meta-transactions to Plaee. The `dpmw` returns signed artefacts to the operator, who routes them onward.
+- **Any balance awareness.** The `dpmw` does not read, monitor, track, or validate balances — on-chain or otherwise. It never checks that a wallet can afford what it is signing for, and it runs no chain watcher. On-chain deposit/withdrawal monitoring and confirmation tracking belong to Plaee and the operator.
 - Holding or reconciling customer balances. That is the operator's ledger and Plaee's shared-balance DB.
+- Modelling the **operational wallet**. That is a Plaee-side *shared-balance* concept; inside the `dpmw` the address backing it is an ordinary user wallet with no special role (see [Section 6.3](#63-wallet-roles-and-the-derivation-model)).
 
 ---
+
+
 
 ## 3. Confirmed design decisions
 
 These were settled with the product owner and are treated as fixed for this spec.
 
 
-| #   | Decision                                                                                                                                                                                                                                                                                                    |
-| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1   | The `dpmw` is **sign-only**. It never submits to Plaee.                                                                                                                                                                                                                                                     |
-| 2   | It is **built on** `dpm-sdk`, vendored and compiled inside the image. No re-implementation of encoding/hashing.                                                                                                                                                                                             |
-| 3   | It has exactly **one outbound dependency to Plaee**: `GET /relay-payload` on `relayer-api`.                                                                                                                                                                                                                 |
-| 4   | **v1 scope** is address management and signing. Monitoring, ledger, and WebSocket are stub interfaces only.                                                                                                                                                                                                 |
-| 5   | The EIP-712 order **domain name is** `"DPM CTF Exchange"` (a change is required in `dpm-sdk`; see [Section 7](#7-dpm-sdk-integration-and-required-changes)).                                                                                                                                                |
-| 6   | Orders carry an **optional** `recipient` **address**, not an identifier. If omitted (or zero), the exchange pays the **maker**. When supplied, it is **constrained** to the **operational wallet** or one of the operator's **customer wallets** known to the `dpmw` — never an arbitrary external address. |
-| 7   | **Address creation precedes DPM registration.** The `dpmw` mints the address; the operator sends it to Plaee; Plaee persists it in the DPM database.                                                                                                                                                        |
+| #   | Decision                                                                                                                                                                                                                                       |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | The `dpmw` is **sign-only**. It never submits to Plaee.                                                                                                                                                                                        |
+| 2   | It is **built on** `dpm-sdk`, vendored and compiled inside the image. No re-implementation of encoding/hashing.                                                                                                                                |
+| 3   | It has exactly **one outbound dependency to Plaee**: `GET /relay-payload` on `relayer-api`.                                                                                                                                                    |
+| 4   | **v1 scope** is address management and signing — nothing else. Monitoring, ledger, and WebSocket are other systems' work, not stubs inside this one.                                                                                           |
+| 5   | The EIP-712 order **domain name is** `"DPM CTF Exchange"` (a change is required in `dpm-sdk`; see [Section 7](#7-dpm-sdk-integration-and-required-changes)).                                                                                   |
+| 6   | Orders carry an **optional** `recipient` **address**, not an identifier. If omitted (or zero), the exchange pays the **maker**. The **operator** supplies both `maker` and `recipient`; the `dpmw` signs them as given and constrains neither. |
+| 7   | **Address creation precedes DPM registration.** The `dpmw` mints the address; the operator sends it to Plaee; Plaee persists it in the DPM database.                                                                                           |
+| 8   | **Phase 1 is Turnkey-only.** The self-custody (mnemonic) vault is deferred behind the same `KeyVault` interface.                                                                                                                               |
+| 9   | The `dpmw` is **balance-agnostic**: no balance reads, no chain monitoring, no validation. It signs agnostically.                                                                                                                               |
+| 10  | The **operational wallet is not a** `dpmw` **concept.** It is a Plaee shared-balance concern; to the `dpmw` it is just another user wallet.                                                                                                    |
+| 11  | Outbound calls to `relayer-api` authenticate with `X-Builder-Api-Key` only. The app-level `X-API-Key` is Plaee's own proxy credential and is never used by the `dpmw`.                                                                         |
 
 
 ---
 
+
+
 ## 4. Roles and responsibilities
 
-![Roles and request routing between customer, Plaee, operator gateway, and the DPM Wallet](images/01-roles.png)
+Roles and request routing between customer, Plaee, operator gateway, and the DPM Wallet
 
 
 | Entity                      | Owns                                                                                                                                                                                                               |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | **Plaee / Plaee DPM**       | The CLOB and matching engine, on-chain settlement, market/CTF operations, `recipientId` generation, event streaming, and the `relayer-api` that broadcasts meta-transactions.                                      |
 | **Operator DPM Gateway**    | Orchestration middleware. The only caller into the `dpmw`. Enforces its own API key with Plaee, applies business rules (trade holds, balance updates), and routes signed payloads from the `dpmw` onward to Plaee. |
-| **DPM Wallet (**`dpmw`**)** | Address lifecycle and signing. Holds keys (mnemonic mode) or delegates to Turnkey. Nothing else.                                                                                                                   |
+| **DPM Wallet (**`dpmw`**)** | Address lifecycle and signing. Delegates key custody to Turnkey and holds no key material. Nothing else.                                                                                                           |
 
 
 The `dpmw`'s world is deliberately small: it receives a request from the gateway, does key work or signing, and returns an artefact to the gateway.
 
-> **Trading ledger and event streaming are not `dpmw` concerns.** Per-customer positions/fills and order/trade event streaming are owned by **Plaee / PlaeeOS** (see the responsibility matrix in the product PDF). The operator sends trading activity to Plaee directly; the `dpmw` only signs. The one Phase-2 interface the `dpmw` does own is `ChainMonitor` (see [Section 13](#13-phase-2-stub-interfaces)), because it watches the `dpmw`'s own on-chain addresses and needs no Plaee data.
+> **Balances, ledger, and event streaming are not** `dpmw` **concerns.** Balance tracking, on-chain deposit/withdrawal monitoring, per-customer positions/fills, and order/trade event streaming are owned by **Plaee / PlaeeOS** and the operator (see the responsibility matrix in the product PDF). The operator sends trading activity to Plaee directly; the `dpmw` only signs, and signs agnostically — it never inspects a balance before producing a signature.
 
 ---
+
+
 
 ## 5. Trust boundary and outbound dependencies
 
@@ -91,31 +113,35 @@ The container is designed to have **near-zero egress to Plaee**. Everything the 
 - Contract addresses (`collateral`, `ctf`, `ctfExchange`, `proxyFactory`, `relayHub`), chain ID, and the exchange address all come from **config**, replacing what would otherwise be a `GET /contract-info` call.
 - The one unavoidable network read is `GET /relay-payload` on `relayer-api`, which returns the **relayer admin address** and the **RelayHub nonce** for a given EOA. These cannot be known ahead of time (the nonce is stateful and lives in the DPM `users` table), so they must be fetched at signing time.
 
-![Trust boundary: the DPM Wallet's only outbound Plaee dependency is the read-only relay-payload call](images/02-trust-boundary.png)
+Trust boundary: the DPM Wallet's only outbound Plaee dependency is the read-only relay-payload call
 
-`GET /relay-payload` is registered above `relayer-api`'s authenticated route group, so it requires only the service-level `X-API-Key` header — not a JWT or the `poly_*` builder HMAC. The `dpmw` supplies that header by injecting a `fetchImpl` into the SDK's `getRelayPayload` (see [Section 7.4](#74-injecting-x-api-key-without-an-sdk-change)).
+`GET /relay-payload` is registered above `relayer-api`'s authenticated route group, so it needs neither a JWT nor the `poly_*` builder HMAC. The `dpmw` authenticates it with the operator's **builder key** in the `X-Builder-Api-Key` header — and nothing else. The app-level `X-API-Key` (`APP_API_KEY`) is **not** used: that credential belongs to Plaee's own proxy callers, and the `dpmw` neither holds nor sends it. The header is supplied by injecting a `fetchImpl` into the SDK's `getRelayPayload` (see [Section 7.4](#74-injecting-x-builder-api-key-without-an-sdk-change)).
 
 ---
 
+
+
 ## 6. Architecture
+
+
 
 ### 6.1 Layered view
 
-![Layered view of the DPM Wallet: HTTP, service, SDK wiring, vault, data, and observability layers](images/03-layered-view.png)
+Layered view of the DPM Wallet: HTTP, service, SDK wiring, vault, data, and observability layers
 
 A request flows top-down: the HTTP layer validates and authenticates, a service orchestrates the steps, the SDK wiring produces the signature via the vault, and the data layer records what happened.
 
 ### 6.2 The `KeyVault` port
 
-`KeyVault` is the single seam every custody mode implements. No service code above it knows whether a key is local or in a TEE.
+`KeyVault` is the single seam every custody mode implements. No service code above it knows where a key lives. **Phase 1 ships exactly one implementation,** `TurnkeyKeyVault`; the union below is left open so a `MnemonicKeyVault` can be added later without touching any caller.
 
 ```ts
-export type VaultMode = "mnemonic" | "turnkey";
+export type VaultMode = "turnkey"; // phase 2 widens this to "turnkey" | "mnemonic"
 
 /**
- * Where the master wallet's key lives. "internal" = derived/held by this vault
- * (mnemonic index 0, or a Turnkey account). "external" = held by a third-party
- * custody (Fireblocks, Qredo, MetaMask, …); the dpmw knows only its address and
+ * Where the master wallet's key lives. "internal" = held by this vault (a
+ * Turnkey account at index 0). "external" = held by a third-party custody
+ * (Fireblocks, Qredo, MetaMask, …); the dpmw knows only its address and
  * cannot sign for it. See Section 6.6.
  */
 export type MasterLocation = "internal" | "external";
@@ -142,7 +168,7 @@ export interface VaultAccount {
 export interface VaultHealth {
   mode: VaultMode;
   initialized: boolean;
-  /** For turnkey: reachability of the TEE. For mnemonic: keystore decrypted. */
+  /** For turnkey: reachability of the TEE. */
   ready: boolean;
 }
 
@@ -151,9 +177,8 @@ export interface KeyVault {
 
   /**
    * First-run: establish the master wallet. When the master is internal, this
-   * creates/loads the key (BIP-44 index 0 for mnemonic, or a Turnkey account).
-   * When the master is external, this records the configured address and marks
-   * it non-signable. Idempotent.
+   * creates/loads the Turnkey account at index 0. When the master is external,
+   * this records the configured address and marks it non-signable. Idempotent.
    */
   initializeMaster(): Promise<MasterInfo>;
 
@@ -180,23 +205,24 @@ Every signing method takes an `address` and uses it to select the correct key ou
 
 ### 6.3 Wallet roles and the derivation model
 
-Both modes share one addressing scheme rooted at the BIP-44 path `m/44'/60'/0'/0/{index}`:
+The `dpmw` recognises exactly **two** wallet roles. Addresses are Turnkey wallet accounts at the BIP-44 path `m/44'/60'/0'/0/{index}`:
 
 
-| Index   | Role                   | Notes                                                                                                                            |
-| ------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `0`     | **Master wallet**      | Central treasury. Used **only when the master is internal** (see §6.6). Reserved/unused when the master is externally custodied. |
-| `1`     | **Operational wallet** | Active liquidity ("O1" in the product draft). The operator creates a user for this address.                                      |
-| `2 … N` | **Customer wallets**   | One EOA per customer; each maps 1:1 to a proxy wallet.                                                                           |
+| Index   | Role              | Notes                                                                                                                            |
+| ------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `0`     | **Master wallet** | Central treasury. Used **only when the master is internal** (see §6.6). Reserved/unused when the master is externally custodied. |
+| `1 … N` | **User wallets**  | One EOA per wallet, each mapping 1:1 to a proxy wallet. Allocated in creation order via `POST /v1/addresses`.                    |
 
 
-In Turnkey mode the same indices map onto Turnkey wallet accounts at matching derivation paths. When an operator wants per-user policy isolation, the alternative is a Turnkey **sub-organisation per customer**; this is documented as a configuration variant, not the default.
+**"User wallet" is the only non-master role.** It covers end customers *and* any operator-owned wallet — including the address Plaee treats as the **operational wallet** for shared balance. That distinction lives entirely on the Plaee/operator side: the operator creates the wallet with its own `ref` like any other, and the `dpmw` stores, derives, and signs for it identically. There is no reserved index, no `operational` role, and no special-casing anywhere in this service.
 
-The operational-wallet and customer-wallet indices are stable regardless of where the master lives: when the master is external, index 0 is simply reserved and the operational wallet remains at index 1.
+When an operator wants per-user policy isolation, the alternative is a Turnkey **sub-organisation per wallet**; this is documented as a configuration variant, not the default.
+
+User-wallet indices are stable regardless of where the master lives: when the master is external, index 0 is simply reserved and user wallets still begin at index 1.
 
 ### 6.4 Proxy wallet address derivation
 
-A customer's on-chain proxy wallet address is a deterministic function of their EOA, so the `dpmw` returns it at creation time with **no chain call**:
+A wallet's on-chain proxy address is a deterministic function of its EOA, so the `dpmw` returns it at creation time with **no chain call**:
 
 ```
 salt        = keccak256(abi.encodePacked(eoaAddress))       // 20-byte address, packed
@@ -206,53 +232,47 @@ proxyAddress = CREATE2(proxyFactory, salt, initCodeHash)     // last 20 bytes
 
 This mirrors `ProxyWalletFactory` in the `proxy-factories` repo (salt is `keccak256(abi.encodePacked(msgSender))`). The `dpmw` computes it locally with viem, using the `proxyFactory` and implementation addresses from config.
 
-### 6.5 The two custody modes
+### 6.5 Custody mode (phase 1: Turnkey)
 
-#### Mnemonic (self-custody) mode
-
-- On first run, generate a **BIP-39 mnemonic** (256-bit entropy → 24 words).
-- Derive the HD root; addresses are children at `m/44'/60'/0'/0/{index}`.
-- The mnemonic is **encrypted at rest** with AES-256-GCM. The encryption key is derived with **scrypt** from a passphrase supplied via env (`DPMW_KEYSTORE_PASSPHRASE`) plus a per-install random salt stored alongside the ciphertext.
-- The encrypted keystore is written to the SQLite volume (`vault_state` table), never to plaintext disk.
-- A guarded **encrypted export** endpoint returns the ciphertext (never plaintext) so the operator can back it up. Requires the passphrase to be re-presented.
-- Signing loads the key into memory only for the duration of the operation; keys are never logged.
-
-#### Turnkey mode
+Phase 1 implements one mode. The `dpmw` holds **no private key material at all** — only the operator's Turnkey API credentials, which authorise it to *request* signatures.
 
 - On first run, when the master is **internal**, ensure a Turnkey **wallet** (or sub-organisation) exists for the master; create if absent. When the master is **external** (§6.6), skip master key creation and only record its address.
 - `createAccount(index, ref)` calls Turnkey to create the wallet account at the derivation path and returns its address.
-- Signing calls Turnkey's sign APIs (`signRawPayload` / typed-data equivalent). The service holds **no private key material** — only the operator's Turnkey API credentials (`TURNKEY_API_PUBLIC_KEY` / `TURNKEY_API_PRIVATE_KEY` / `TURNKEY_ORGANIZATION_ID`).
-- Turnkey is reached through a `TurnkeyProvider` abstraction (see [Section 8](#8-third-party-integrations)) so a different signer (Fireblocks, Qredo) can replace it.
+- Signing calls Turnkey's sign APIs (`signRawPayload` / typed-data equivalent) using `TURNKEY_API_PUBLIC_KEY` / `TURNKEY_API_PRIVATE_KEY` / `TURNKEY_ORGANIZATION_ID`.
+- Turnkey is reached through a `SignerProvider` abstraction (see [Section 8](#8-third-party-integrations)) so a different signer (Fireblocks, Qredo) can replace it.
 
-Both modes must reproduce the SDK's `personalSign` hex/UTF-8 branching exactly (see [Section 9.5](#95-a-required-personalsign-detail)).
+Because no key is held locally, there is no keystore, no passphrase, and no encrypted-export endpoint in phase 1. The self-custody (mnemonic) mode that would introduce them is deferred to [Section 13](#13-deferred-capabilities).
+
+The vault must reproduce the SDK's `personalSign` hex/UTF-8 branching exactly (see [Section 9.5](#95-a-required-personalsign-detail)).
 
 ### 6.6 Master wallet location (internal vs external)
 
-The vault mode (mnemonic / Turnkey) and the **master wallet location** are two independent axes. The operational and customer wallets are always managed by the active vault, but the master wallet — the central treasury — need not be. Per the product requirements it "can be managed natively within Turnkey or via an external enterprise custody provider (e.g., Fireblocks, Qredo)", and in practice it may also be a wallet the operator controls through MetaMask or a hardware/enterprise custodian. The `dpmw` therefore does **not** assume the master is a key it holds.
+The vault mode and the **master wallet location** are two independent axes. User wallets are always managed by the active vault, but the master wallet — the central treasury — need not be. Per the product requirements it "can be managed natively within Turnkey or via an external enterprise custody provider (e.g., Fireblocks, Qredo)", and in practice it may also be a wallet the operator controls through MetaMask or a hardware/enterprise custodian. The `dpmw` therefore does **not** assume the master is a key it can reach.
 
 Two locations are supported, selected by config:
 
 
 | Location       | Who holds the key                                                | `dpmw` capability                                                                                         |
 | -------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `**internal**` | The active vault: mnemonic index 0, or a Turnkey master account. | Full — the `dpmw` can sign treasury transactions from the master.                                         |
+| `**internal**` | The active vault — a Turnkey master account at index 0.          | Full — the `dpmw` can sign treasury transactions from the master.                                         |
 | `**external**` | A third-party custodian (Fireblocks, Qredo, MetaMask, hardware). | Address-only — the `dpmw` records the master address for policy and reporting but **cannot sign** for it. |
 
 
 Identifying the master location is a first-run concern. At `POST /v1/vault/init` the `dpmw` resolves the master from config:
 
 - `DPMW_MASTER_LOCATION=internal` (default): the vault creates/loads the master key. `MasterInfo.signable = true`, `index = 0`.
-- `DPMW_MASTER_LOCATION=external`: `DPMW_MASTER_ADDRESS` (required) is recorded and `DPMW_MASTER_CUSTODIAN` (optional label) is stored. No key is derived. `MasterInfo.signable = false`.
+- `DPMW_MASTER_LOCATION=external`: `DPMW_MASTER_ADDRESS` (required) is recorded and `DPMW_MASTER_CUSTODIAN` (optional label) is stored. No key is created. `MasterInfo.signable = false`.
 
 Consequences when the master is external:
 
-- **Treasury signing that draws from the master is not performed by the `dpmw`.** `POST /v1/treasury/rebalance` and `POST /v1/treasury/external-withdraw` return `MASTER_NOT_SIGNABLE` for the master-signed leg; the operator executes that leg through the external custodian. Legs signed **from the operational wallet** (which is always vault-managed) remain available — e.g. operational → master sweeps.
-- **Deposit/withdrawal monitoring** (phase 2) still tracks the master address; it is an observation target regardless of who signs.
-- **Policy** ([Section 12.3](#123-treasury-policy-engine)) still treats the master address as an allowed rebalancing counterparty and as the only source permitted to reach external addresses.
+- **Treasury signing that draws from the master is not performed by the** `dpmw`**.** `POST /v1/treasury/rebalance` and `POST /v1/treasury/external-withdraw` return `MASTER_NOT_SIGNABLE` for the master-signed leg; the operator executes that leg through the external custodian. Legs signed **from a user wallet** (always vault-managed) remain available — e.g. a user wallet → master sweep.
+- **Policy** ([Section 12.3](#123-treasury-policy)) still treats the master address as the only source permitted to reach external addresses.
 
 This keeps the three-tier model intact while letting the operator custody the highest-value wallet wherever they already trust it.
 
 ---
+
+
 
 ## 7. dpm-sdk integration and required changes
 
@@ -331,20 +351,22 @@ Add and export a **pure** `buildOrderTypedData(order, chainId, exchangeAddress, 
 
 Change `"Polymarket CTF Exchange"` to `"DPM CTF Exchange"` (line 238 above), ideally exposed as a parameter/config value rather than a literal so both the SDK and the `dpmw` read it from one place. Until this lands, an order signed by `dpm-sdk` and an order signed by the `dpmw` produce **different digests** for identical inputs — one of them will be rejected by the exchange. The `dpmw` keeps the name in config with `"DPM CTF Exchange"` as the default and runs a **startup self-check** (see [Section 9.2](#92-order-eip-712-worked-example-and-self-check)).
 
-### 7.4 Injecting `X-API-Key` without an SDK change
+### 7.4 Injecting `X-Builder-Api-Key` without an SDK change
 
-`relayer-api` gates every route on `X-API-Key`. `RequestAuth` currently supports only `jwt`, `lp`, and `none`. No SDK change is needed: `getRelayPayload` already accepts a `fetchImpl`, so the `dpmw` injects a fetch wrapper that adds the header.
+Calls from the `dpmw` to `relayer-api` carry the operator's **builder key** in `X-Builder-Api-Key` — the credential `relayer-api` resolves through `builderauth` — and nothing else. The app-level `X-API-Key` is Plaee's own proxy credential; the `dpmw` neither holds nor sends it.
+
+`RequestAuth` currently supports only `jwt`, `lp`, and `none`, but no SDK change is needed: `getRelayPayload` already accepts a `fetchImpl`, so the `dpmw` injects a fetch wrapper that adds the header.
 
 ```ts
-const apiKeyFetch: typeof fetch = (input, init = {}) => {
+const builderKeyFetch: typeof fetch = (input, init = {}) => {
   const headers = new Headers(init.headers);
-  headers.set("X-API-Key", config.relayerApiKey);
+  headers.set("X-Builder-Api-Key", config.relayerBuilderApiKey);
   return fetch(input, { ...init, headers });
 };
 // passed as fetchImpl into buildUsdcCtfAllowanceTx(...) etc.
 ```
 
-Optionally, `dpm-sdk` may add `{ mode: "apiKey"; apiKey: string }` to `RequestAuth` for tidiness. This is a nice-to-have, not a requirement.
+Optionally, `dpm-sdk` may add `{ mode: "builderApiKey"; apiKey: string }` to `RequestAuth` for tidiness. This is a nice-to-have, not a requirement.
 
 ### 7.5 Widen the export surface (server-only entry)
 
@@ -361,6 +383,8 @@ export interface InternalWalletPort {
   personalSign(message: string, address: string): Promise<string>;
 }
 ```
+
+
 
 ### 7.7 The `VaultWalletAdapter`
 
@@ -390,24 +414,28 @@ const body = await buildUsdcCtfAllowanceTx({
   relayerBaseUrl: config.relayerBaseUrl,
   contractInfo: config.contractInfo,
   proxyWallet: wallet.proxyAddress,
-  fetchImpl: apiKeyFetch,
+  fetchImpl: builderKeyFetch,
 });
 res.json(body); // operator POSTs this to relayer-api /submit
 ```
 
 ---
 
+
+
 ## 8. Third-party integrations
+
+
 
 ### 8.1 `relayer-api` (the only Plaee dependency)
 
 - **Call:** `GET /relay-payload?address=<eoa>&type=PROXY`
 - **Returns:** `{ address: <relayerAdminAddress>, nonce: <string> }`
-- **Auth:** `X-API-Key` only.
+- **Auth:** `X-Builder-Api-Key` only — the operator's builder key. The app-level `X-API-Key` is not sent (it is Plaee's proxy credential), and no JWT or `poly_`* HMAC is involved.
 - **Constraint:** `type` must be `PROXY`; `SAFE` is rejected by the endpoint.
 - **Precondition:** the EOA must already be registered in the DPM `users` table, because the nonce is resolved from it (see [Section 11](#11-onboarding-sequence)).
 
-Reached through the SDK's `getRelayPayload` with the `apiKeyFetch` wrapper.
+Reached through the SDK's `getRelayPayload` with the `builderKeyFetch` wrapper.
 
 ### 8.2 Signer provider abstraction (Turnkey, swappable)
 
@@ -429,11 +457,15 @@ class TurnkeySignerProvider implements SignerProvider { /* ... */ }
 class FireblocksSignerProvider implements SignerProvider { /* ... */ }
 ```
 
+
+
 ### 8.3 Chain client (viem)
 
-viem is used **only** for cryptography and ABI encoding (CREATE2 derivation, `encodeFunctionData`, typed-data hashing, transaction serialisation). No JSON-RPC provider is required in v1 because the `dpmw` does not broadcast or read chain state. (When monitoring lands in a later phase, a read-only RPC URL is added — see the stubbed interface in [Section 13](#13-phase-2-stub-interfaces).)
+viem is used **only** for cryptography and ABI encoding (CREATE2 derivation, `encodeFunctionData`, typed-data hashing, transaction serialisation). **No JSON-RPC provider is configured at all** — the `dpmw` neither broadcasts nor reads chain state, including balances. There is no RPC URL in the configuration, which makes balance-agnosticism a structural property rather than a convention.
 
 ---
+
+
 
 ## 9. Signing reference
 
@@ -472,11 +504,16 @@ Domain:
 }
 ```
 
-For a standard customer order: `maker` = the customer's **proxy wallet** (source of funds), `signer` = the customer's **EOA** (which produces the signature), `taker` = zero address (public order), `signatureType` = `1` (`POLY_PROXY`).
+**The operator supplies** `maker` **and** `recipient`**; the** `dpmw` **supplies** `signer`**.** The request names a wallet `ref`, which selects the key that produces the signature — that key's EOA becomes `signer`. Everything about where value comes from and goes to is the operator's decision:
 
-**Recipient is optional.** `recipient` may be omitted by the operator. When it is omitted — or supplied as the zero address — the exchange resolves `recipient == address(0) ? maker : recipient`, so proceeds go to the **maker**. The `dpmw` encodes an omitted recipient as the zero address in the signed order (the two are equivalent on-chain), so an unset recipient always means "pay the maker".
+- `maker` — **operator-supplied**, the source of funds. For a standard user order this is the wallet's proxy address, which the `dpmw` returned at address creation, but the `dpmw` does not derive or override it.
+- `recipient` — **operator-supplied and optional** (see below).
+- `taker` — zero address for a public order.
+- `signatureType` — `1` (`POLY_PROXY`).
 
-**Recipient constraint (when supplied).** When the operator does supply a non-zero `recipient`, the `dpmw` validates it against its address directory before signing: it must be either the **operational wallet** address or a **wallet belonging to one of the operator's customers** (present in the `wallets` table). Any other value is rejected with `POLICY_VIOLATION`. This prevents an order from directing proceeds to a wallet outside the operator's control. An omitted or zero recipient is always allowed (it resolves to the maker).
+**Recipient is optional.** When it is omitted — or supplied as the zero address — the exchange resolves `recipient == address(0) ? maker : recipient`, so proceeds go to the **maker**. The `dpmw` encodes an omitted recipient as the zero address in the signed order (the two are equivalent on-chain), so an unset recipient always means "pay the maker".
+
+**No recipient constraint.** The `dpmw` does not validate `recipient` (or `maker`) against its address directory, against the master, or against any notion of an operational wallet. It signs the values it is given. Deciding which addresses may receive proceeds is the operator's responsibility, enforced in the operator gateway where the business context lives — the `dpmw` has neither that context nor any balance view with which to second-guess it.
 
 Owned by: `buildOrderFields` + the new `buildOrderTypedData` in `clob-order.ts`; signed via `KeyVault.signTypedData`.
 
@@ -497,10 +534,10 @@ The resulting order fields:
 ```json
 {
   "salt": "<random uint256>",
-  "maker": "<proxyWallet>",
-  "signer": "<eoa>",
+  "maker": "<operator-supplied, typically the wallet's proxy address>",
+  "signer": "<eoa of the requested ref>",
   "taker": "0x0000000000000000000000000000000000000000",
-  "recipient": "<operator-supplied or zero>",
+  "recipient": "<operator-supplied, or zero to pay the maker>",
   "tokenId": "<CTF token id>",
   "makerAmount": "40000000",
   "takerAmount": "100000000",
@@ -560,6 +597,8 @@ and returns a complete `SubmitTransactionRequest` the operator POSTs verbatim to
 }
 ```
 
+
+
 ### 9.5 A required `personalSign` detail
 
 The SDK's EOA `personalSign` branches on the message shape: a `0x`-prefixed hex string is signed as **raw bytes**, anything else as **UTF-8**:
@@ -575,7 +614,7 @@ The SDK's EOA `personalSign` branches on the message shape: a `0x`-prefixed hex 
     },
 ```
 
-Both `KeyVault` implementations (mnemonic and Turnkey) **must reproduce this branch exactly**. The `rlx:` struct hash is hex and must be signed as raw bytes; a cancel message is UTF-8. Getting this wrong computes the signature over the wrong preimage and the RelayHub rejects it.
+`TurnkeyKeyVault` — and any `KeyVault` added later — **must reproduce this branch exactly**. The `rlx:` struct hash is hex and must be signed as raw bytes; a cancel message is UTF-8. Getting this wrong computes the signature over the wrong preimage and the RelayHub rejects it.
 
 ### 9.6 Cancel message
 
@@ -589,13 +628,15 @@ Owned by: `formatCancelOrderMessage` in `clob-order.ts`; the `dpmw` converts to 
 
 ### 9.7 Raw treasury transaction
 
-Master ↔ operational rebalancing and master → external transfers are ordinary EVM transactions serialised and signed with `KeyVault.signTransaction`. The `dpmw` returns the **signed transaction hex**; broadcasting is out of v1 scope. Master → external is documented as bypassing the Plaee proxy per the product security constraint.
+Rebalancing between the master and a user wallet, and master → external transfers, are ordinary EVM transactions serialised and signed with `KeyVault.signTransaction`. The operator supplies `from`, `to`, and the amount; the `dpmw` does not check that `from` holds it. The `dpmw` returns the **signed transaction hex**; broadcasting is out of v1 scope. Master → external is documented as bypassing the Plaee proxy per the product security constraint.
 
 ---
 
+
+
 ## 10. HTTP API
 
-Base path: `/v1`. All requests require the inbound `X-API-Key` header ([Section 12](#12-security)). All bodies are validated with zod; a validation failure returns `400` with the error envelope. All responses are JSON.
+Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `DPMW_API_KEY` ([Section 12](#12-security)) — this is the operator gateway's key *into* the `dpmw`, unrelated to the builder key the `dpmw` sends *out* to `relayer-api` (§7.4). All bodies are validated with zod; a validation failure returns `400` with the error envelope. All responses are JSON.
 
 ### 10.1 Error envelope
 
@@ -604,35 +645,38 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header ([Section 
 ```
 
 
-| Code                      | HTTP | Meaning                                                                                                                                  |
-| ------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `UNAUTHORIZED`            | 401  | Missing/invalid API key.                                                                                                                 |
-| `VALIDATION_FAILED`       | 400  | zod validation error.                                                                                                                    |
-| `VAULT_NOT_INITIALIZED`   | 409  | Master not yet created.                                                                                                                  |
-| `ADDRESS_NOT_FOUND`       | 404  | Unknown customer ref / address.                                                                                                          |
-| `CUSTOMER_NOT_REGISTERED` | 409  | EOA not yet registered with DPM; relay-payload unavailable.                                                                              |
-| `RELAYER_UNAVAILABLE`     | 502  | `GET /relay-payload` failed.                                                                                                             |
-| `MASTER_NOT_SIGNABLE`     | 409  | The master wallet is externally custodied; the `dpmw` cannot sign that leg (see §6.6).                                                   |
-| `SIGNING_FAILED`          | 500  | Vault/provider signing error.                                                                                                            |
-| `POLICY_VIOLATION`        | 403  | Destination or recipient disallowed by policy (treasury allowlist, or an order recipient that is not the operational/a customer wallet). |
-| `IDEMPOTENCY_CONFLICT`    | 409  | Same idempotency key, different body.                                                                                                    |
+| Code                      | HTTP | Meaning                                                                                                                            |
+| ------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `UNAUTHORIZED`            | 401  | Missing/invalid API key.                                                                                                           |
+| `VALIDATION_FAILED`       | 400  | zod validation error.                                                                                                              |
+| `VAULT_NOT_INITIALIZED`   | 409  | Master not yet created.                                                                                                            |
+| `ADDRESS_NOT_FOUND`       | 404  | Unknown customer ref / address.                                                                                                    |
+| `CUSTOMER_NOT_REGISTERED` | 409  | EOA not yet registered with DPM; relay-payload unavailable.                                                                        |
+| `RELAYER_UNAVAILABLE`     | 502  | `GET /relay-payload` failed.                                                                                                       |
+| `MASTER_NOT_SIGNABLE`     | 409  | The master wallet is externally custodied; the `dpmw` cannot sign that leg (see §6.6).                                             |
+| `SIGNING_FAILED`          | 500  | Vault/provider signing error.                                                                                                      |
+| `POLICY_VIOLATION`        | 403  | External treasury destination not on the withdrawal allowlist, or dual control unsatisfied (§12.3). Never raised for order fields. |
+| `IDEMPOTENCY_CONFLICT`    | 409  | Same idempotency key, different body.                                                                                              |
+
+
 
 
 ### 10.2 Vault
 
 
-| Method | Path               | Purpose                                                                                           |
-| ------ | ------------------ | ------------------------------------------------------------------------------------------------- |
-| `GET`  | `/v1/health`       | Liveness + vault health. Public (no key), per prediction-gateway convention.                      |
-| `POST` | `/v1/vault/init`   | First-run: establish the master (internal or external) per config. Idempotent.                    |
-| `GET`  | `/v1/vault/status` | `{ mode, initialized, master: { address, location, signable, custodian? }, operationalAddress }`. |
-| `POST` | `/v1/vault/export` | Mnemonic mode only: returns **encrypted** keystore; requires passphrase re-presentation.          |
+| Method | Path               | Purpose                                                                        |
+| ------ | ------------------ | ------------------------------------------------------------------------------ |
+| `GET`  | `/v1/health`       | Liveness + vault health. Public (no key), per prediction-gateway convention.   |
+| `POST` | `/v1/vault/init`   | First-run: establish the master (internal or external) per config. Idempotent. |
+| `GET`  | `/v1/vault/status` | `{ mode, initialized, master: { address, location, signable, custodian? } }`.  |
 
+
+There is no export endpoint in phase 1: Turnkey holds the key material, so the `dpmw` has nothing to export. Backup of key material is a Turnkey concern.
 
 `POST /v1/vault/init` response (internal master):
 
 ```json
-{ "mode": "mnemonic", "master": { "address": "0x…", "location": "internal", "index": 0, "signable": true } }
+{ "mode": "turnkey", "master": { "address": "0x…", "location": "internal", "index": 0, "signable": true } }
 ```
 
 `POST /v1/vault/init` response (external master):
@@ -641,29 +685,31 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header ([Section 
 { "mode": "turnkey", "master": { "address": "0x…", "location": "external", "custodian": "fireblocks", "signable": false } }
 ```
 
+
+
 ### 10.3 Addresses
 
 
-| Method | Path                 | Purpose                                                       |
-| ------ | -------------------- | ------------------------------------------------------------- |
-| `POST` | `/v1/addresses`      | Create the next customer wallet; returns EOA + derived proxy. |
-| `GET`  | `/v1/addresses`      | List addresses (paginated).                                   |
-| `GET`  | `/v1/addresses/:ref` | Look up one address by customer ref.                          |
+| Method | Path                 | Purpose                                                   |
+| ------ | -------------------- | --------------------------------------------------------- |
+| `POST` | `/v1/addresses`      | Create the next user wallet; returns EOA + derived proxy. |
+| `GET`  | `/v1/addresses`      | List addresses (paginated).                               |
+| `GET`  | `/v1/addresses/:ref` | Look up one address by ref.                               |
 
 
 `POST /v1/addresses` request:
 
 ```json
-{ "ref": "customer-12345", "role": "customer" }
+{ "ref": "customer-12345" }
 ```
 
 Response:
 
 ```json
-{ "ref": "customer-12345", "index": 2, "address": "0x<eoa>", "proxyAddress": "0x<proxy>" }
+{ "ref": "customer-12345", "index": 1, "address": "0x<eoa>", "proxyAddress": "0x<proxy>" }
 ```
 
-`role` is one of `customer` (default) or `operational` (index 1, created once). The master is created only via `/v1/vault/init`.
+There is **no** `role` **field**. Every address this endpoint creates is a user wallet, allocated at the next free index. An operator who needs a wallet for Plaee's shared balance (the "operational wallet") creates it here like any other, under a `ref` of its choosing — the `dpmw` treats it identically. The master is created only via `/v1/vault/init`.
 
 ### 10.4 Order signing
 
@@ -679,6 +725,7 @@ Response:
 ```json
 {
   "ref": "customer-12345",
+  "maker": "0x<operator-supplied source of funds>",
   "side": 0,
   "tokenId": "71321045…",
   "shares": 100,
@@ -701,7 +748,9 @@ Response:
 }
 ```
 
-The operator forwards this to PlaeeOS. The `dpmw` does not call `clob-api`. `recipient` is **optional**: omit it (or pass the zero address) to have the exchange pay the maker. If a **non-zero** `recipient` is supplied and is neither the operational wallet nor a known customer wallet, the request is rejected with `POLICY_VIOLATION` (see the recipient constraint in [Section 9.1](#91-eip-712-order--field-order-and-domain)).
+The operator forwards this to PlaeeOS. The `dpmw` does not call `clob-api`.
+
+`ref` selects the signing key and becomes `signer`. `maker` and `recipient` are the operator's to decide and are signed as supplied — neither is validated against the address directory, and no balance is consulted. `recipient` is **optional**: omit it (or pass the zero address) to have the exchange pay the maker (see [Section 9.1](#91-eip-712-order--field-order-and-domain)).
 
 ### 10.5 Meta-transactions (return a submit-ready body)
 
@@ -721,18 +770,18 @@ Common request shape:
 { "ref": "customer-12345", "conditionId": "0x…", "amountDecimal": "10.0", "recipient": "0x…" }
 ```
 
-(`conditionId` for redeem/split/merge; `recipient` + `amountDecimal` for withdraw; allowance needs only `ref`.) Every response is a complete `SubmitTransactionRequest` (see [Section 9.4](#94-meta-transaction--worked-example-allowance)). Each of these endpoints requires the customer EOA to be DPM-registered; otherwise `CUSTOMER_NOT_REGISTERED`.
+(`conditionId` for redeem/split/merge; `recipient` + `amountDecimal` for withdraw; allowance needs only `ref`.) Every response is a complete `SubmitTransactionRequest` (see [Section 9.4](#94-meta-transaction--worked-example-allowance)). The operator supplies `recipient` and `amountDecimal`; the `dpmw` signs them without checking the destination or whether the proxy holds the amount. Each of these endpoints requires the wallet's EOA to be DPM-registered; otherwise `CUSTOMER_NOT_REGISTERED`.
 
 ### 10.6 Treasury
 
 
-| Method | Path                             | Purpose                                                   |
-| ------ | -------------------------------- | --------------------------------------------------------- |
-| `POST` | `/v1/treasury/rebalance`         | Sign a master↔operational transfer; return signed tx hex. |
-| `POST` | `/v1/treasury/external-withdraw` | Sign a master→external transfer; dual-control gated.      |
+| Method | Path                             | Purpose                                                              |
+| ------ | -------------------------------- | -------------------------------------------------------------------- |
+| `POST` | `/v1/treasury/rebalance`         | Sign a transfer between the master and a user wallet; return tx hex. |
+| `POST` | `/v1/treasury/external-withdraw` | Sign a master→external transfer; dual-control gated.                 |
 
 
-When the master is externally custodied (§6.6), the master-signed leg of either endpoint returns `MASTER_NOT_SIGNABLE`; the operator performs it through their custodian. Operational-wallet legs (e.g. operational → master sweeps) remain signable.
+`/v1/treasury/rebalance` takes the funding side as a wallet `ref` (or `master`) and the destination as an address; the operator chooses both. When the master is externally custodied (§6.6), the master-signed leg of either endpoint returns `MASTER_NOT_SIGNABLE`; the operator performs it through their custodian. Legs signed from a user wallet (e.g. a sweep back to the master) remain signable.
 
 ### 10.7 Audit
 
@@ -742,43 +791,52 @@ When the master is externally custodied (§6.6), the master-signed leg of either
 | `GET`  | `/v1/audit` | Query the audit trail (paginated, filter by ref/action/time). |
 
 
+
+
 ### 10.8 Idempotency
 
 All `POST` signing and address-creation endpoints accept an `Idempotency-Key` header. The `dpmw` stores the key with a hash of the request body and the response; a replay with the same key and body returns the stored response, and the same key with a different body returns `IDEMPOTENCY_CONFLICT`. Address creation is additionally idempotent by derivation index.
 
 ---
 
+
+
 ## 11. Onboarding sequence
 
 Address creation and DPM registration have a strict order, because `GET /relay-payload` resolves the nonce from the DPM `users` table. A customer EOA that Plaee has never seen cannot yield a relay payload, so no meta-transaction can be signed for it until registration completes.
 
-![Onboarding sequence: address creation precedes DPM registration before any meta-transaction can be signed](images/04-onboarding-sequence.png)
+Onboarding sequence: address creation precedes DPM registration before any meta-transaction can be signed
 
 This is a hard precondition on every meta-transaction endpoint, surfaced as the distinct `CUSTOMER_NOT_REGISTERED` error so the operator can tell "not yet registered with Plaee" apart from a genuine signing failure.
 
 ---
 
+
+
 ## 12. Security
+
+
 
 ### 12.1 Inbound authentication
 
 - Every `/v1` route except `/v1/health` requires `X-API-Key`, compared in constant time against `DPMW_API_KEY`. This is the operator back-office authentication called for in the product requirements.
 
+
+
 ### 12.2 Outbound credential handling
 
-- The `X-API-Key` for `relayer-api` (`RELAYER_API_KEY`) and the Turnkey credentials are read from env and never logged.
-- The mnemonic keystore passphrase is read from env at boot; the decrypted mnemonic is held only transiently during signing.
+- The builder key sent to `relayer-api` (`RELAYER_BUILDER_API_KEY`) and the Turnkey credentials are read from env and never logged.
+- No key material is held: Turnkey holds every private key, so there is no keystore and no passphrase to protect.
 
-### 12.3 Treasury policy engine
 
-A policy layer enforces the product's wallet constraints before any signature is produced:
 
-- **Order recipient** must be the **operational wallet** or a **known customer wallet** (or the zero address, meaning the maker). Arbitrary recipients are rejected.
-- **Customer proxy** funds may only move to the **operational wallet** (redeem/withdraw destinations are checked against the configured operational address).
-- The **operational wallet** may rebalance with the **master** but may not pay **external** addresses.
-- **Master → external** is allowed but only via `/v1/treasury/external-withdraw`, never through a proxy/relayer path.
+### 12.3 Treasury policy
 
-Destinations are checked against an **allowlist** derived from the vault's own addresses plus a configured external-withdrawal allowlist. A disallowed destination returns `POLICY_VIOLATION`.
+The `dpmw` enforces exactly **one** policy rule, and it is not a balance check:
+
+- **Master → external** transfers are allowed only via `POST /v1/treasury/external-withdraw`, never through a proxy/relayer path, and only to a destination on the configured `DPMW_EXTERNAL_ALLOWLIST`. A destination outside the allowlist returns `POLICY_VIOLATION`.
+
+Nothing else is policed. In particular the `dpmw` does **not** validate order `maker`/`recipient`, does **not** restrict where user-wallet funds may move, and does **not** check that any address holds what is being signed for. Those are business rules that depend on ledger state and shared balance, and they belong in the operator gateway — the `dpmw` has neither the context nor a balance view to enforce them.
 
 ### 12.4 Dual control for external withdrawals
 
@@ -786,26 +844,26 @@ Destinations are checked against an **allowlist** derived from the vault's own a
 
 ### 12.5 Log redaction
 
-Structured logs (one JSON object per line, matching the prediction-gateway convention) redact: mnemonics, private keys, passphrases, API keys, HMAC secrets, and full signatures (logged as a truncated prefix). Addresses, indices, refs, and non-secret request metadata are logged in full for support.
+Structured logs (one JSON object per line, matching the prediction-gateway convention) redact: Turnkey API credentials, API keys (inbound `DPMW_API_KEY` and outbound builder key alike), HMAC secrets, and full signatures (logged as a truncated prefix). Addresses, indices, refs, and non-secret request metadata are logged in full for support.
 
 ---
 
-## 13. Phase-2 stub interfaces
 
-These are defined now so later work does not force a redesign. v1 ships the interfaces with no-op or "not implemented" adapters.
 
-Only **on-chain deposit/withdrawal monitoring** is a `dpmw` responsibility, because it watches the `dpmw`'s own wallet addresses on-chain and needs no data from Plaee. The per-customer trading ledger and the order/trade/position event stream are **not** `dpmw` concerns — see the note in [Section 4](#4-roles-and-responsibilities).
+## 13. Deferred capabilities
 
-```ts
-/** On-chain deposit/withdrawal monitoring (Polygon). */
-export interface ChainMonitor {
-  start(): Promise<void>;
-  onSettledDeposit(handler: (e: DepositEvent) => void): void;
-  onSettledWithdrawal(handler: (e: WithdrawalEvent) => void): void;
-}
-```
+One capability is deferred to a later phase, and it needs no new interface because the seam already exists.
+
+**Self-custody (mnemonic) vault.** A `MnemonicKeyVault` implementing the existing `KeyVault` port ([Section 6.2](#62-the-keyvault-port)) — BIP-39 mnemonic generated on first run, addresses derived at `m/44'/60'/0'/0/{index}`, the mnemonic encrypted at rest with AES-256-GCM under a scrypt-derived passphrase, and a guarded encrypted-export endpoint for operator backup. Adding it means widening `VaultMode`, writing one class, and changing one line of DI wiring; no service, route, or repository code above the port changes. The `vault_state` table gains the keystore columns at that point ([Section 14.1](#141-tables)).
+
+Everything else once considered for a later phase is now **out of scope permanently**, not stubbed:
+
+- **On-chain monitoring, balance tracking, and confirmation watching.** The `dpmw` is balance-agnostic by design (§2.3). No `ChainMonitor` interface is defined, and no RPC provider is configured, precisely so this cannot creep in. Plaee and the operator own it.
+- **Per-customer trading ledger** and **order/trade/position event streaming** — owned by Plaee / PlaeeOS, see the note in [Section 4](#4-roles-and-responsibilities).
 
 ---
+
+
 
 ## 14. Data model (SQLite)
 
@@ -813,23 +871,22 @@ Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a
 
 ### 14.1 Tables
 
-`vault_state` — one row; the vault's initialisation and (mnemonic mode) encrypted keystore.
+`vault_state` — one row; the vault's initialisation state. It holds **no key material**: Turnkey does.
 
 
-| Column                | Type       | Notes                                     |
-| --------------------- | ---------- | ----------------------------------------- |
-| `id`                  | INTEGER PK | Always `1`.                               |
-| `mode`                | TEXT       | `mnemonic`                                |
-| `initialized`         | INTEGER    | 0/1.                                      |
-| `keystore_ciphertext` | BLOB       | AES-256-GCM ciphertext (mnemonic mode).   |
-| `keystore_salt`       | BLOB       | scrypt salt.                              |
-| `keystore_iv`         | BLOB       | GCM IV.                                   |
-| `turnkey_org_id`      | TEXT       | Turnkey mode.                             |
-| `master_location`     | TEXT       | `internal`                                |
-| `master_address`      | TEXT       | Recorded master address (both locations). |
-| `master_custodian`    | TEXT       | Custody label when external (nullable).   |
-| `created_at`          | TEXT       | RFC3339.                                  |
+| Column             | Type       | Notes                                     |
+| ------------------ | ---------- | ----------------------------------------- |
+| `id`               | INTEGER PK | Always `1`.                               |
+| `mode`             | TEXT       | `turnkey` (the only value in phase 1).    |
+| `initialized`      | INTEGER    | 0/1.                                      |
+| `turnkey_org_id`   | TEXT       | Turnkey organisation / sub-org id.        |
+| `master_location`  | TEXT       | `internal` | `external`.                  |
+| `master_address`   | TEXT       | Recorded master address (both locations). |
+| `master_custodian` | TEXT       | Custody label when external (nullable).   |
+| `created_at`       | TEXT       | RFC3339.                                  |
 
+
+A later mnemonic vault ([Section 13](#13-deferred-capabilities)) adds `keystore_ciphertext`, `keystore_salt`, and `keystore_iv` in its own migration; they are deliberately absent now so nothing suggests the container stores keys.
 
 `wallets` — the address directory.
 
@@ -837,12 +894,12 @@ Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a
 | Column               | Type           | Notes                                                   |
 | -------------------- | -------------- | ------------------------------------------------------- |
 | `id`                 | INTEGER PK     |                                                         |
-| `ref`                | TEXT UNIQUE    | Operator customer reference.                            |
-| `role`               | TEXT           | `master`                                                |
+| `ref`                | TEXT UNIQUE    | Operator-supplied wallet reference.                     |
+| `role`               | TEXT           | `master` | `user` — no other roles exist.               |
 | `derivation_index`   | INTEGER UNIQUE | BIP-44 index.                                           |
 | `eoa_address`        | TEXT UNIQUE    | Lowercased hex.                                         |
 | `proxy_address`      | TEXT           | Lowercased hex; derived.                                |
-| `turnkey_account_id` | TEXT           | Turnkey mode.                                           |
+| `turnkey_account_id` | TEXT           | Turnkey account id.                                     |
 | `dpm_registered`     | INTEGER        | 0/1; set when the operator confirms Plaee registration. |
 | `created_at`         | TEXT           |                                                         |
 
@@ -887,6 +944,8 @@ Indices: `wallets_ref`, `wallets_eoa_lower`, `wallets_proxy_lower`, `wallets_ind
 | `created_at`    | TEXT    | TTL-eligible.           |
 
 
+
+
 ### 14.2 Migrations
 
 Drizzle migrations live in `src/db/migrations/` and run on boot before the HTTP server binds. WAL mode is set via `PRAGMA journal_mode=WAL` at connection open.
@@ -897,12 +956,14 @@ Drizzle migrations live in `src/db/migrations/` and run on boot before the HTTP 
 
 Four rules make this safe in practice:
 
-| Rule | Why |
-| --- | --- |
-| **Mount the directory, never the file.** Bind-mount `/data`, not `/data/dpmw.sqlite`. | WAL mode writes two sidecar files next to the database — `dpmw.sqlite-wal` and `dpmw.sqlite-shm`. They must sit on the same filesystem as the main file, and SQLite recovery may recreate them. A single-file bind mount breaks both. |
-| **Local disk only — no NFS/SMB/network volumes.** | SQLite relies on POSIX advisory locking, which is unreliable over network filesystems and can silently corrupt the database. |
-| **Exactly one writer.** Never run more than one `dpmw` container against the same volume (`replicas: 1`). | SQLite permits one writer at a time; two containers sharing a volume will produce lock contention and, on a network mount, corruption. |
-| `PRAGMA synchronous=FULL`. | In WAL mode the SQLite default is `NORMAL`, which fsyncs only at checkpoint — a host crash or power loss can lose the most recently committed transactions. For a wallet directory, losing a just-created address record means losing track of customer funds, so the write-latency cost is worth paying. |
+
+| Rule                                                                                                      | Why                                                                                                                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Mount the directory, never the file.** Bind-mount `/data`, not `/data/dpmw.sqlite`.                     | WAL mode writes two sidecar files next to the database — `dpmw.sqlite-wal` and `dpmw.sqlite-shm`. They must sit on the same filesystem as the main file, and SQLite recovery may recreate them. A single-file bind mount breaks both.                                                                     |
+| **Local disk only — no NFS/SMB/network volumes.**                                                         | SQLite relies on POSIX advisory locking, which is unreliable over network filesystems and can silently corrupt the database.                                                                                                                                                                              |
+| **Exactly one writer.** Never run more than one `dpmw` container against the same volume (`replicas: 1`). | SQLite permits one writer at a time; two containers sharing a volume will produce lock contention and, on a network mount, corruption.                                                                                                                                                                    |
+| `PRAGMA synchronous=FULL`.                                                                                | In WAL mode the SQLite default is `NORMAL`, which fsyncs only at checkpoint — a host crash or power loss can lose the most recently committed transactions. For a wallet directory, losing a just-created address record means losing track of customer funds, so the write-latency cost is worth paying. |
+
 
 Connection pragmas set in `src/db/client.ts` at open:
 
@@ -920,6 +981,8 @@ db.pragma("busy_timeout = 5000");  // wait rather than throw SQLITE_BUSY
 Because the `dpmw` is sign-only, there is **no in-flight state to recover**. Signing is deterministic and holds nothing across requests; RelayHub nonces are fetched from `relayer-api` at signing time rather than stored. A crash mid-request loses at most that one response, and the caller can safely retry with the same `Idempotency-Key`.
 
 ---
+
+
 
 ## 15. Project structure
 
@@ -951,17 +1014,16 @@ dpm-wallet/
 │   │   ├── order-signer.service.ts
 │   │   ├── meta-tx.service.ts
 │   │   ├── treasury.service.ts
-│   │   └── policy.ts            # treasury destination allowlist / dual control
+│   │   └── policy.ts            # external-withdrawal allowlist / dual control
 │   ├── vault/
 │   │   ├── key-vault.ts         # KeyVault port + types
-│   │   ├── mnemonic-vault.ts    # BIP-39/44 + AES-256-GCM keystore
-│   │   ├── turnkey-vault.ts     # uses SignerProvider
+│   │   ├── turnkey-vault.ts     # the only vault in phase 1; uses SignerProvider
 │   │   └── providers/
 │   │       ├── signer-provider.ts
 │   │       └── turnkey.provider.ts
 │   ├── sdk/
 │   │   ├── vault-wallet-adapter.ts  # InternalWalletPort bridge
-│   │   ├── api-key-fetch.ts         # fetchImpl injecting X-API-Key
+│   │   ├── builder-key-fetch.ts     # fetchImpl injecting X-Builder-Api-Key
 │   │   └── wiring.ts                # picks SDK build functions
 │   ├── db/
 │   │   ├── client.ts            # better-sqlite3 + drizzle, WAL
@@ -988,6 +1050,8 @@ dpm-wallet/
 └── README.md
 ```
 
+
+
 ### 15.1 Stack choices
 
 
@@ -1003,51 +1067,59 @@ dpm-wallet/
 | Logging         | JSON to stdout                              | Matches prediction-gateway `log.ts`.                                           |
 
 
+
+
 ### 15.2 Vendoring dpm-sdk
 
 `dpm-sdk` is added as a git submodule under `vendor/dpm-sdk` and referenced as a path/workspace dependency. The Docker build compiles it before the app so the required changes ([Section 7](#7-dpm-sdk-integration-and-required-changes)) and the app ship as one coordinated build with no npm release in between. The app imports from the SDK's server-only entry (or `./lp` as fallback) to avoid pulling React/Privy/Magic into the container.
 
 ---
 
+
+
 ## 16. Configuration
 
 All configuration is via environment variables, parsed and validated at boot (missing required values throw before the server binds).
 
 
-| Variable                   | Required      | Default             | Description                                                                             |
-| -------------------------- | ------------- | ------------------- | --------------------------------------------------------------------------------------- |
-| `PORT`                     | no            | `8090`              | HTTP listen port.                                                                       |
-| `DPMW_VAULT_MODE`          | yes           | —                   | `mnemonic`                                                                              |
-| `DPMW_MASTER_LOCATION`     | no            | `internal`          | `internal` (vault holds the master key) or `external` (third-party custody). See §6.6.  |
-| `DPMW_MASTER_ADDRESS`      | external only | —                   | Master wallet address when `DPMW_MASTER_LOCATION=external`.                             |
-| `DPMW_MASTER_CUSTODIAN`    | no            | —                   | Optional custody label for an external master (e.g. `fireblocks`, `qredo`, `metamask`). |
-| `DPMW_API_KEY`             | yes           | —                   | Inbound API key from the operator gateway.                                              |
-| `DPMW_KEYSTORE_PASSPHRASE` | mnemonic mode | —                   | scrypt passphrase for the encrypted mnemonic keystore.                                  |
-| `TURNKEY_API_PUBLIC_KEY`   | turnkey mode  | —                   | Turnkey API public key.                                                                 |
-| `TURNKEY_API_PRIVATE_KEY`  | turnkey mode  | —                   | Turnkey API private key.                                                                |
-| `TURNKEY_ORGANIZATION_ID`  | turnkey mode  | —                   | Turnkey organisation/sub-org id.                                                        |
-| `RELAYER_BASE_URL`         | yes           | —                   | Base URL of `relayer-api` (for `/relay-payload`).                                       |
-| `RELAYER_API_KEY`          | yes           | —                   | `X-API-Key` sent to `relayer-api`.                                                      |
-| `CHAIN_ID`                 | yes           | `137`               | Polygon mainnet.                                                                        |
-| `EXCHANGE_DOMAIN_NAME`     | yes           | `DPM CTF Exchange`  | EIP-712 order domain name; self-checked at boot.                                        |
-| `CONTRACT_COLLATERAL`      | yes           | —                   | USDC address.                                                                           |
-| `CONTRACT_CTF`             | yes           | —                   | ConditionalTokens address.                                                              |
-| `CONTRACT_CTF_EXCHANGE`    | yes           | —                   | CTF Exchange (`verifyingContract`).                                                     |
-| `CONTRACT_PROXY_FACTORY`   | yes           | —                   | ProxyWalletFactory address.                                                             |
-| `CONTRACT_PROXY_IMPL`      | yes           | —                   | Proxy implementation (for CREATE2 derivation).                                          |
-| `CONTRACT_RELAY_HUB`       | yes           | —                   | RelayHub address.                                                                       |
-| `OPERATIONAL_ADDRESS`      | no            | derived             | Cached operational wallet address (index 1).                                            |
-| `DPMW_EXTERNAL_ALLOWLIST`  | no            | —                   | Comma-separated external withdrawal destinations.                                       |
-| `DPMW_APPROVER_KEYS`       | no            | —                   | Comma-separated approver tokens for dual control.                                       |
-| `DATABASE_PATH`            | no            | `/data/dpmw.sqlite` | SQLite file on the mounted volume.                                                      |
-| `LOG_LEVEL`                | no            | `info`              | `debug`                                                                                 |
+| Variable                  | Required      | Default             | Description                                                                             |
+| ------------------------- | ------------- | ------------------- | --------------------------------------------------------------------------------------- |
+| `PORT`                    | no            | `8090`              | HTTP listen port.                                                                       |
+| `DPMW_VAULT_MODE`         | no            | `turnkey`           | `turnkey` is the only accepted value in phase 1.                                        |
+| `DPMW_MASTER_LOCATION`    | no            | `internal`          | `internal` (vault holds the master key) or `external` (third-party custody). See §6.6.  |
+| `DPMW_MASTER_ADDRESS`     | external only | —                   | Master wallet address when `DPMW_MASTER_LOCATION=external`.                             |
+| `DPMW_MASTER_CUSTODIAN`   | no            | —                   | Optional custody label for an external master (e.g. `fireblocks`, `qredo`, `metamask`). |
+| `DPMW_API_KEY`            | yes           | —                   | Inbound `X-API-Key` expected from the operator gateway.                                 |
+| `TURNKEY_API_PUBLIC_KEY`  | yes           | —                   | Turnkey API public key.                                                                 |
+| `TURNKEY_API_PRIVATE_KEY` | yes           | —                   | Turnkey API private key.                                                                |
+| `TURNKEY_ORGANIZATION_ID` | yes           | —                   | Turnkey organisation/sub-org id.                                                        |
+| `RELAYER_BASE_URL`        | yes           | —                   | Base URL of `relayer-api` (for `/relay-payload`).                                       |
+| `RELAYER_BUILDER_API_KEY` | yes           | —                   | Builder key sent as `X-Builder-Api-Key` to `relayer-api`. No app `X-API-Key` is used.   |
+| `CHAIN_ID`                | yes           | `137`               | Polygon mainnet. Used for EIP-712 domain and tx serialisation only — there is no RPC.   |
+| `EXCHANGE_DOMAIN_NAME`    | yes           | `DPM CTF Exchange`  | EIP-712 order domain name; self-checked at boot.                                        |
+| `CONTRACT_COLLATERAL`     | yes           | —                   | USDC address.                                                                           |
+| `CONTRACT_CTF`            | yes           | —                   | ConditionalTokens address.                                                              |
+| `CONTRACT_CTF_EXCHANGE`   | yes           | —                   | CTF Exchange (`verifyingContract`).                                                     |
+| `CONTRACT_PROXY_FACTORY`  | yes           | —                   | ProxyWalletFactory address.                                                             |
+| `CONTRACT_PROXY_IMPL`     | yes           | —                   | Proxy implementation (for CREATE2 derivation).                                          |
+| `CONTRACT_RELAY_HUB`      | yes           | —                   | RelayHub address.                                                                       |
+| `DPMW_EXTERNAL_ALLOWLIST` | no            | —                   | Comma-separated external withdrawal destinations (§12.3).                               |
+| `DPMW_APPROVER_KEYS`      | no            | —                   | Comma-separated approver tokens for dual control.                                       |
+| `DATABASE_PATH`           | no            | `/data/dpmw.sqlite` | SQLite file on the mounted volume.                                                      |
+| `LOG_LEVEL`               | no            | `info`              | `debug` | `info` | `warn` | `error`.                                                    |
 
 
 The six `CONTRACT_*` values plus `CHAIN_ID` are exactly what a `GET /contract-info` call would return; supplying them as config removes that outbound dependency.
 
+Turnkey credentials are unconditionally required because Turnkey is the only vault in phase 1. There is no keystore passphrase (nothing is stored locally), no RPC URL (no chain reads), and no operational-wallet address (not a `dpmw` concept).
+
 ---
 
+
+
 ## 17. Docker and operations
+
+
 
 ### 17.1 Image
 
@@ -1083,6 +1155,8 @@ CMD ["node", "dist/index.js"]
 
 > Native-module caveat: `better-sqlite3` compiles a native addon. Building and running on the **same** Node major/Alpine base (as above) avoids ABI mismatches; a prebuilt binary is used when available.
 
+
+
 ### 17.2 Compose (operator convenience)
 
 ```yaml
@@ -1107,24 +1181,29 @@ volumes:
 
 > Do not scale this service beyond one replica — SQLite allows a single writer per database file (§14.3).
 
+
+
 ### 17.3 Health and readiness
 
 - `GET /v1/health` (liveness) returns `200` with `{ status: "ok" }` once the process is up.
-- Readiness additionally checks vault health: mnemonic keystore decrypts, or Turnkey is reachable, and the DB is writable. Not ready until `POST /v1/vault/init` has run at least once.
+- Readiness additionally checks vault health: Turnkey is reachable and the DB is writable. Not ready until `POST /v1/vault/init` has run at least once.
+
+
 
 ### 17.4 First-run
 
-1. Operator sets env (mode, keys, contract addresses, and the master location — `internal`, or `external` with `DPMW_MASTER_ADDRESS`).
+1. Operator sets env (Turnkey credentials, contract addresses, and the master location — `internal`, or `external` with `DPMW_MASTER_ADDRESS`).
 2. Container boots, runs migrations, passes the EIP-712 self-check.
-3. Operator calls `POST /v1/vault/init` → internal master (index 0) is created and, in mnemonic mode, the encrypted keystore is written to the volume; an external master is recorded as non-signable (no key created).
-4. Operator calls `POST /v1/addresses` with `role: "operational"` to create index 1.
-5. Customer onboarding proceeds per [Section 11](#11-onboarding-sequence).
+3. Operator calls `POST /v1/vault/init` → an internal master (index 0) is created in Turnkey; an external master is recorded as non-signable (no key created).
+4. Wallet onboarding proceeds per [Section 11](#11-onboarding-sequence). If the operator needs a wallet to back Plaee's shared balance, it is created through the same `POST /v1/addresses` call as any other — there is no separate step and no reserved index.
+
+
 
 ### 17.5 Restart and cold-start recovery
 
-On every subsequent boot the container rebuilds its entire working state from the volume. **Nothing is held only in memory between runs**, and no step requires the operator to re-supply anything except the environment variables (crucially `DPMW_KEYSTORE_PASSPHRASE`, which is never written to disk).
+On every subsequent boot the container rebuilds its entire working state from the volume. **Nothing is held only in memory between runs**, and no step requires the operator to re-supply anything except the environment variables (crucially the Turnkey credentials, which are never written to disk).
 
-![Cold-start recovery: the container rebuilds vault and directory state from the SQLite volume, failing fast on any mismatch](images/05-cold-start-recovery.png)
+Cold-start recovery: the container rebuilds vault and directory state from the SQLite volume, failing fast on any mismatch
 
 `src/startup/bootstrap.ts` runs this sequence before the HTTP server binds:
 
@@ -1136,8 +1215,8 @@ export async function bootstrap(config: Config): Promise<Runtime> {
   const state = await vaultStateRepo.load(db);
   if (!state?.initialized) return uninitialized(db); // only /v1/health + /v1/vault/init
 
-  const vault = await rehydrateVault(state, config);  // decrypt keystore, or re-auth Turnkey
-  await assertVaultMatchesDirectory(vault, db);       // re-derive and compare stored addresses
+  const vault = await rehydrateVault(state, config);  // re-authenticate against Turnkey
+  await assertVaultMatchesDirectory(vault, db);       // re-read accounts and compare addresses
   await assertMasterMatchesConfig(state, config);     // location/address drift check
   await assertExchangeDomain(config);                 // existing EIP-712 self-check
 
@@ -1149,40 +1228,45 @@ export async function bootstrap(config: Config): Promise<Runtime> {
 
 What each step recovers:
 
-| Step | Recovered from | Notes |
-| --- | --- | --- |
-| **Migrations** | `src/db/migrations/` | Idempotent; brings an older volume up to the current schema after an image upgrade. |
-| **Vault state** | `vault_state` (single row) | Mode, master location, master address, custodian label, and the encrypted keystore blob. |
-| **Signing keys** | `keystore_ciphertext` + `keystore_salt` + `keystore_iv` | Decrypted with `DPMW_KEYSTORE_PASSPHRASE` into memory only. Turnkey mode holds no key — it re-reads `turnkey_org_id` and re-authenticates. |
-| **Address directory** | `wallets` | Refs, roles, derivation indices, EOA and proxy addresses, Turnkey account ids, `dpm_registered` flags. |
-| **Next derivation index** | `MAX(derivation_index) + 1` | Read from the database, never from memory or config, so a restart can never reissue an index and collide with an existing address. |
-| **Idempotency window** | `idempotency_keys` | Survives restart, so a client retrying across a restart still gets the original response instead of a second signature. |
-| **Audit history** | `audit_events`, `signing_requests` | Continuous across restarts; the log is append-only. |
+
+| Step                      | Recovered from                     | Notes                                                                                                                                     |
+| ------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| **Migrations**            | `src/db/migrations/`               | Idempotent; brings an older volume up to the current schema after an image upgrade.                                                       |
+| **Vault state**           | `vault_state` (single row)         | Mode, Turnkey org id, master location, master address, custodian label.                                                                   |
+| **Signing keys**          | Nothing — they never left Turnkey  | The container re-reads `turnkey_org_id` and re-authenticates with the env credentials. There is no key material on the volume to recover. |
+| **Address directory**     | `wallets`                          | Refs, roles, derivation indices, EOA and proxy addresses, Turnkey account ids, `dpm_registered` flags.                                    |
+| **Next derivation index** | `MAX(derivation_index) + 1`        | Read from the database, never from memory or config, so a restart can never reissue an index and collide with an existing address.        |
+| **Idempotency window**    | `idempotency_keys`                 | Survives restart, so a client retrying across a restart still gets the original response instead of a second signature.                   |
+| **Audit history**         | `audit_events`, `signing_requests` | Continuous across restarts; the log is append-only.                                                                                       |
+
 
 Three of these steps are **fail-fast consistency checks** rather than loads, and the container refuses to become ready if any fails:
 
-- `assertVaultMatchesDirectory` re-derives the EOA for the stored wallets and compares against `wallets.eoa_address`. A mismatch means the volume and the key material have diverged — a database restored from a different install, or a new mnemonic dropped onto an existing volume. Continuing would silently mint a second, unrelated address tree for existing customer refs, so this aborts startup with `VAULT_DB_MISMATCH` and exits non-zero (a boot failure, not an HTTP error — the server never binds).
+- `assertVaultMatchesDirectory` re-reads the stored wallets' accounts from Turnkey and compares the returned addresses against `wallets.eoa_address`. A mismatch means the volume and the Turnkey organisation have diverged — a database restored from a different install, or the container pointed at a different `TURNKEY_ORGANIZATION_ID`. Continuing would silently mint a second, unrelated address tree for existing refs, so this aborts startup with `VAULT_DB_MISMATCH` and exits non-zero (a boot failure, not an HTTP error — the server never binds).
 - `assertMasterMatchesConfig` compares `vault_state.master_location` / `master_address` with `DPMW_MASTER_LOCATION` / `DPMW_MASTER_ADDRESS`. This catches an operator flipping custody mode against a volume that was initialised the other way.
-- A wrong `DPMW_KEYSTORE_PASSPHRASE` fails earlier and unambiguously: AES-256-GCM authentication fails during decryption, so the container never reaches the address checks.
+- Wrong or revoked Turnkey credentials fail earlier and unambiguously: re-authentication fails in `rehydrateVault`, so the container never reaches the address checks.
 
 Readiness (§17.3) only reports ready after `bootstrap` completes, so an orchestrator will not route traffic to a container whose vault could not be rehydrated.
 
 ### 17.6 Backup and restore
 
-The volume is the unit of backup. Because the database may have an active `-wal` file, **do not `cp` the `.sqlite` file from a running container** — that can capture a torn state. Use SQLite's online backup, which is safe against a live writer and produces a single consistent file:
+The volume is the unit of backup. Because the database may have an active `-wal` file, **do not** `cp` **the** `.sqlite` **file from a running container** — that can capture a torn state. Use SQLite's online backup, which is safe against a live writer and produces a single consistent file:
 
 ```bash
 docker exec dpmw node -e "require('better-sqlite3')(process.env.DATABASE_PATH)\
   .exec(\"VACUUM INTO '/data/backup-\$(date +%F).sqlite'\")"
 ```
 
-Restore is the reverse: stop the container, place the file at `DATABASE_PATH` on the volume (removing any stale `-wal`/`-shm` sidecars), and start. In mnemonic mode the backup contains the **encrypted** keystore, so a restore also needs the original `DPMW_KEYSTORE_PASSPHRASE` — and the mnemonic itself should additionally be backed up out of band via the guarded export endpoint (§6.4). A database backup alone is not a key backup.
+Restore is the reverse: stop the container, place the file at `DATABASE_PATH` on the volume (removing any stale `-wal`/`-shm` sidecars), and start. The backup contains **no key material** — only the address directory, audit trail, and vault state — so it must be restored against the same Turnkey organisation it was taken from, or `assertVaultMatchesDirectory` (§17.5) will refuse to start. Key backup and recovery are Turnkey's responsibility, not the volume's.
 
 ---
+
+
 
 ## 18. Open items for implementation
 
 - Confirm the Turnkey signing API surface for EIP-712 typed data vs raw payloads, and map it onto `SignerProvider.signRawPayload`.
+- Pin `GET /relay-payload` authentication with a contract test: the deployed `relayer-api` must accept a bare `X-Builder-Api-Key` on that route, with no app `X-API-Key` present. The global API-key gate in front of the route group has to admit builder keys for this to hold.
 - Confirm the exact `SubmitTransactionRequest` field set accepted by the deployed `relayer-api` matches the SDK's `SubmitTransactionRequest` type (they align today; pin it with a contract test).
 - Decide whether `EXCHANGE_DOMAIN_NAME` becomes an SDK parameter (preferred) or stays a `dpmw`-side override until the SDK change lands.
 - Decide dual-control model beyond v1 (shared approver tokens → per-approver signatures).

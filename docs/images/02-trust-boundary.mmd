@@ -21,6 +21,6 @@ flowchart TB
   sdk --> adapter
   adapter --> vault
   vault -->|TurnkeyKeyVault only| turnkey
-  sdk -->|"X-API-Key via injected fetchImpl, read-only"| relayer
+  sdk -->|"X-Builder-Api-Key via injected fetchImpl, read-only"| relayer
   api -->|signed payloads returned| gateway
   gateway -->|submits| plaee
