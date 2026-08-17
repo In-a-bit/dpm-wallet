@@ -1,0 +1,8 @@
+flowchart LR
+  customer[Customer] --> plaeeUi[Plaee iFrame UI]
+  plaeeUi --> plaee[Plaee Backend / DPM Engine]
+  plaee --> gateway[Operator DPM Gateway]
+  gateway --> dpmw[DPM Wallet]
+  dpmw --> gateway
+  gateway --> plaee
+  dpmw -->|read-only relay-payload| relayer[relayer-api]

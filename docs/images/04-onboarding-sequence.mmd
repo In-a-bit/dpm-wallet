@@ -1,0 +1,16 @@
+sequenceDiagram
+  participant Gateway as Operator Gateway
+  participant Dpmw as DPM Wallet
+  participant Plaee as Plaee Backend
+  participant Relayer as relayer-api
+
+  Gateway->>Dpmw: POST /v1/addresses
+  Dpmw->>Dpmw: derive EOA at next index, compute proxy address
+  Dpmw-->>Gateway: address, proxyAddress, index
+  Gateway->>Plaee: register customer address
+  Plaee-->>Gateway: persisted in dpm-db
+  Note over Gateway,Relayer: only now can meta-transactions be signed
+  Gateway->>Dpmw: POST /v1/meta-tx/allowance
+  Dpmw->>Relayer: GET /relay-payload?address=EOA&type=PROXY
+  Relayer-->>Dpmw: relayer address, nonce
+  Dpmw-->>Gateway: complete SubmitTransactionRequest body

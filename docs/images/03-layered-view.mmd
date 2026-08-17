@@ -1,0 +1,13 @@
+flowchart TB
+  http[HTTP layer: Express routes, auth, zod validation]
+  svc[Service layer: AddressService, OrderSigner, MetaTxSigner, TreasurySigner]
+  sdkw[SDK wiring: VaultWalletAdapter, buildX calls]
+  vaultL[Vault layer: KeyVault port + Mnemonic/Turnkey adapters]
+  data[Data layer: SQLite via Drizzle]
+  obs[Observability: structured logs, audit trail]
+
+  http --> svc
+  svc --> sdkw
+  svc --> data
+  sdkw --> vaultL
+  svc --> obs

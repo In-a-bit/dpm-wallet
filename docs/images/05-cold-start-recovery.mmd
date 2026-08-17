@@ -1,0 +1,13 @@
+flowchart TB
+  start([Container starts]) --> cfg[Load and validate env config]
+  cfg --> open[Open SQLite on /data volume, apply pragmas<br/>SQLite replays -wal if the previous run crashed]
+  open --> mig[Run Drizzle migrations]
+  mig --> state{vault_state<br/>initialized?}
+
+  state -->|no| waitInit[Serve /v1/health and<br/>/v1/vault/init only]
+  state -->|yes| hydrate[Rehydrate vault<br/>decrypt keystore or re-auth Turnkey]
+
+  hydrate --> checks{"Consistency checks pass?<br/>1. derived addresses match wallets table<br/>2. master location/address match config<br/>3. EIP-712 domain self-check"}
+  checks -->|no| fail[Abort startup non-zero<br/>VAULT_DB_MISMATCH]
+  checks -->|yes| idx[nextIndex = MAX derivation_index + 1<br/>purge expired idempotency keys]
+  idx --> bind([Bind HTTP server, report ready])

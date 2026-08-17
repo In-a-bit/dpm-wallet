@@ -1,0 +1,26 @@
+flowchart TB
+  subgraph operatorInfra [Operator Infrastructure]
+    gateway[Operator DPM Gateway]
+    subgraph dpmw [DPM Wallet Docker Container]
+      api[Express API plus Auth]
+      services[Address and Signing Services]
+      adapter[VaultWalletAdapter]
+      sdk[vendored dpm-sdk build functions]
+      vault[KeyVault Port]
+      sqlite[(SQLite Volume)]
+    end
+  end
+  turnkey[Turnkey TEE]
+  relayer[relayer-api GET /relay-payload]
+  plaee[Plaee Backend]
+
+  gateway -->|API key| api
+  api --> services
+  services --> sdk
+  services --> sqlite
+  sdk --> adapter
+  adapter --> vault
+  vault -->|TurnkeyKeyVault only| turnkey
+  sdk -->|"X-API-Key via injected fetchImpl, read-only"| relayer
+  api -->|signed payloads returned| gateway
+  gateway -->|submits| plaee
