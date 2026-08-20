@@ -1,0 +1,104 @@
+import {
+  buildFundWithdrawTx,
+  buildMergePositionsTx,
+  buildRedeemPositionsTx,
+  buildSplitPositionTx,
+  buildUsdcCtfAllowanceTx,
+  type ContractInfo,
+  type FetchLike,
+  type InternalWalletPort,
+  type SubmitTransactionRequest,
+} from "@inabit-com/dpm-sdk/server";
+
+import type { Config } from "../config.js";
+
+/**
+ * The five meta-transaction kinds the service can sign. Both the route table and the
+ * builder lookup key off these, so adding a kind is a single-place change.
+ */
+export const META_TX_KINDS = ["allowance", "redeem", "withdraw", "split", "merge"] as const;
+export type MetaTxKind = (typeof META_TX_KINDS)[number];
+
+export type MetaTxBuildRequest = {
+  wallet: InternalWalletPort;
+  proxyWallet: string;
+  conditionId?: string;
+  amountDecimal?: string;
+  recipient?: string;
+};
+
+/**
+ * Projects config onto the shape the SDK expects. This is the whole reason the service
+ * needs no `GET /contract-info` call.
+ */
+export function toContractInfo(config: Config): ContractInfo {
+  return {
+    chainId: String(config.chainId),
+    collateral: config.contracts.collateral,
+    ctf: config.contracts.ctf,
+    ctfExchange: config.contracts.ctfExchange,
+    proxyFactory: config.contracts.proxyFactory,
+    relayHub: config.contracts.relayHub,
+  };
+}
+
+/**
+ * Dispatches to the SDK's build-only meta-transaction functions, which sign and return the
+ * request body without submitting it. Submission is the operator's step.
+ *
+ * The per-kind argument requirements are enforced by the route DTOs, so a missing
+ * `conditionId` here is a wiring bug rather than a client error — hence the plain throw.
+ */
+export function buildMetaTx(
+  kind: MetaTxKind,
+  request: MetaTxBuildRequest,
+  common: MetaTxCommonParams,
+): Promise<SubmitTransactionRequest> {
+  const base = { ...common, wallet: request.wallet, proxyWallet: request.proxyWallet };
+  switch (kind) {
+    case "allowance":
+      return buildUsdcCtfAllowanceTx(base);
+    case "redeem":
+      return buildRedeemPositionsTx({
+        ...base,
+        conditionId: requiredField(request.conditionId, "conditionId"),
+      });
+    case "split":
+      return buildSplitPositionTx({
+        ...base,
+        conditionId: requiredField(request.conditionId, "conditionId"),
+        amountDecimal: requiredField(request.amountDecimal, "amountDecimal"),
+      });
+    case "merge":
+      return buildMergePositionsTx({
+        ...base,
+        conditionId: requiredField(request.conditionId, "conditionId"),
+        amountDecimal: requiredField(request.amountDecimal, "amountDecimal"),
+      });
+    case "withdraw":
+      return buildFundWithdrawTx({
+        ...base,
+        recipient: requiredField(request.recipient, "recipient"),
+        amountDecimal: requiredField(request.amountDecimal, "amountDecimal"),
+      });
+  }
+}
+
+export type MetaTxCommonParams = {
+  relayerBaseUrl: string;
+  contractInfo: ContractInfo;
+  fetchImpl: FetchLike;
+};
+
+export function metaTxCommonParams(config: Config, fetchImpl: FetchLike): MetaTxCommonParams {
+  return {
+    relayerBaseUrl: config.relayer.baseUrl,
+    contractInfo: toContractInfo(config),
+    fetchImpl,
+  };
+}
+
+function requiredField<T>(value: T | undefined, field: string): T {
+  if (value === undefined) throw new Error(`meta-tx build is missing "${field}"`);
+  return value;
+}
