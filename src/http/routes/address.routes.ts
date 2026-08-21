@@ -28,6 +28,14 @@ export function addressRoutes(runtime: Runtime): Router {
     res.json(toResponse(addresses.get(refSchema.parse(req.params.ref))));
   });
 
+  // The operator cannot register the address with the DPM platform without proof that this
+  // vault controls it, and the private key never leaves here — so the signature is handed
+  // over instead. The operator then posts it to the platform through the gateway.
+  router.post("/addresses/:ref/dpm-attestation", async (req, res) => {
+    const ref = refSchema.parse(req.params.ref);
+    res.json(await addresses.signDpmAttestation(ref));
+  });
+
   // Not in the original spec, which describes `wallets.dpm_registered` without giving the
   // operator a way to set it. Meta-transaction signing gates on the flag, so the gateway
   // needs this call after the DPM platform confirms registration.

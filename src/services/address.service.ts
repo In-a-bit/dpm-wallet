@@ -1,3 +1,6 @@
+import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/server";
+import type { Address, Hex } from "viem";
+
 import type { Config } from "../config.js";
 import { addressNotFound, refAlreadyExists, vaultNotInitialized } from "../errors.js";
 import type { Wallet, WalletPage, WalletRepository } from "../db/repositories/wallet.repo.js";
@@ -6,6 +9,12 @@ import { deriveProxyAddress } from "../crypto/proxy-address.js";
 import { AuditAction } from "../observability/audit-action.js";
 import { AuditLog } from "../observability/audit.js";
 import type { KeyVault } from "../vault/key-vault.interface.js";
+
+/** The pair the DPM registration call takes: the EOA and its proof of control. */
+export type DpmAttestation = {
+  address: Address;
+  signature: Hex;
+};
 
 /**
  * Creates and reads user wallets. Every address this service mints is a user wallet at the
@@ -38,6 +47,26 @@ export class AddressService {
 
   list(limit: number, offset: number): WalletPage {
     return this.wallets.list(limit, offset);
+  }
+
+  /**
+   * Signs the attestation the DPM platform requires to register this wallet's EOA. The
+   * message is fixed and carries no address, so the platform learns which key signed it by
+   * recovering the signer — which is the whole proof, since only this vault can produce it.
+   */
+  async signDpmAttestation(ref: string): Promise<DpmAttestation> {
+    const wallet = this.get(ref);
+    const signature = await this.vault.personalSign(
+      wallet.eoaAddress,
+      LP_ATTESTATION_MESSAGE,
+    );
+    this.audit.record({
+      ref,
+      action: AuditAction.AddressDpmAttestation,
+      outcome: "success",
+      detail: { address: wallet.eoaAddress },
+    });
+    return { address: wallet.eoaAddress, signature };
   }
 
   /**

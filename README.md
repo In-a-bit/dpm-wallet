@@ -50,6 +50,7 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 | `POST` | `/v1/addresses` | Mint a user wallet at the next free index |
 | `GET` | `/v1/addresses` | Paginated directory |
 | `GET` | `/v1/addresses/:ref` | One wallet by ref |
+| `POST` | `/v1/addresses/:ref/dpm-attestation` | Sign the proof of control the DPM registration call needs |
 | `POST` | `/v1/addresses/:ref/dpm-registered` | Mark the EOA as registered with DPM |
 | `POST` | `/v1/sign/order` | EIP-712 CLOB order signature |
 | `POST` | `/v1/sign/cancel` | EIP-191 cancellation signature |
@@ -98,9 +99,33 @@ address is computed locally from the factory, implementation, and EOA — no cha
 replicating the factory's 167-byte creation code byte-for-byte. `src/crypto/proxy-address.test.ts`
 cross-checks it against the canonical Go implementation.
 
+### Registering an address with the DPM platform
+
+A new address can be signed for immediately but cannot trade: `GET /relay-payload` resolves the
+RelayHub nonce from the DPM `users` table, so the platform has to know the EOA first. This service
+never talks to the platform on the operator's behalf — it only signs — and the operator reaches
+the platform through `prediction-gateway`, never a backend service directly.
+
+| Step | Call |
+|---|---|
+| 1. Mint the address | `POST /v1/addresses` `{ ref }` |
+| 2. Prove control of it | `POST /v1/addresses/:ref/dpm-attestation` → `{ address, signature }` |
+| 3. Register it | `POST /api/prediction/gamma/custody/users` with `X-Builder-Api-Private-Key` and the pair from step 2 |
+| 4. Record that it is registered | `POST /v1/addresses/:ref/dpm-registered` |
+| 5. Approve the exchange | `POST /v1/meta-tx/allowance` `{ ref }`, then relay the returned body |
+
+The attestation is an EIP-191 signature over the SDK's `LP_ATTESTATION_MESSAGE`, the same fixed
+string the LP onboarding path uses. It carries no address of its own: `gamma-api` recovers the
+signer and registers whatever address that yields, which is what makes it proof rather than a
+claim. Step 3 is idempotent per address, so a lost response can be retried.
+
+Step 5 needs no separate proxy deployment. `ProxyWalletFactory.proxy()` deploys the CREATE2 clone
+on its first relayed call, which is the allowance batch.
+
 ### Signing
 
 Orders are signed as EIP-712 typed data against the exchange domain. The typed-data layout comes
+	status, body := postCustodyUser(t, s
 from `dpm-sdk` rather than being restated here, because a field present in one copy and missing
 from the other yields a valid signature over the wrong digest — no error, just an order that can
 never settle. The domain name is the SDK's `EXCHANGE_DOMAIN_NAME` constant and is not
@@ -271,7 +296,9 @@ These differ from `docs/TECHNICAL-SPEC.md`, recorded here because the spec is th
 1. **`POST /v1/addresses/:ref/dpm-registered` is new.** The spec describes the
    `wallets.dpm_registered` column without giving the operator a way to set it. Meta-transaction
    signing gates on the flag, so the gateway needs this call after the DPM platform confirms
-   registration.
+   registration. `POST /v1/addresses/:ref/dpm-attestation` is new for the step before it: the
+   registration call has to prove control of the address, and the key that proves it never leaves
+   here.
 2. **Outbound auth uses `X-Builder-Api-Private-Key`, not `X-Builder-Api-Key`.** The latter is a
    publishable key safe to ship to a browser and cannot authenticate a backend. `relayer-api`
    gained a private-key credential (`builder_api_private_keys`) for this caller.

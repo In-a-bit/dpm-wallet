@@ -1,3 +1,5 @@
+import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/server";
+import { recoverMessageAddress } from "viem";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { startHarness, type Harness } from "./testing/harness.js";
@@ -102,6 +104,22 @@ describe("dpm-wallet HTTP API", () => {
 
         expect(again.status).toBe(409);
         expect(again.body.error.code).toBe("REF_ALREADY_EXISTS");
+      });
+
+      // gamma-api recovers the signer from this signature to decide whether the caller
+      // controls the address it is registering, so anything that does not recover to the
+      // wallet's own EOA would be rejected there.
+      it("attests control of an address with a recoverable signature", async () => {
+        const created = await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
+        const response = await harness.post(`/v1/addresses/${CUSTOMER}/dpm-attestation`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.address).toBe(created.body.address);
+        const signer = await recoverMessageAddress({
+          message: LP_ATTESTATION_MESSAGE,
+          signature: response.body.signature,
+        });
+        expect(signer.toLowerCase()).toBe(created.body.address.toLowerCase());
       });
 
       it("reports an unknown ref as ADDRESS_NOT_FOUND", async () => {
