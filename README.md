@@ -113,6 +113,7 @@ the platform through `prediction-gateway`, never a backend service directly.
 | 3. Register it | `POST /api/prediction/gamma/custody/users` with `X-Builder-Api-Private-Key` and the pair from step 2 |
 | 4. Record that it is registered | `POST /v1/addresses/:ref/dpm-registered` |
 | 5. Approve the exchange | `POST /v1/meta-tx/allowance` `{ ref }`, then relay the returned body |
+| 6. Relay it | `POST /api/prediction/relayer/submit` with `X-Builder-Api-Private-Key` and `X-Builder-Address: <the EOA>` |
 
 The attestation is an EIP-191 signature over the SDK's `LP_ATTESTATION_MESSAGE`, the same fixed
 string the LP onboarding path uses. It carries no address of its own: `gamma-api` recovers the
@@ -122,10 +123,14 @@ claim. Step 3 is idempotent per address, so a lost response can be retried.
 Step 5 needs no separate proxy deployment. `ProxyWalletFactory.proxy()` deploys the CREATE2 clone
 on its first relayed call, which is the allowance batch.
 
+Step 6 pairs the builder secret key with `X-Builder-Address`, and `relayer-api` relays only if that
+address is one the calling builder registered in step 3. That pairing is why a custody operator does
+not need the `poly_*` HMAC headers: those authenticate against one secret shared by every caller and
+would let any holder name any address.
+
 ### Signing
 
 Orders are signed as EIP-712 typed data against the exchange domain. The typed-data layout comes
-	status, body := postCustodyUser(t, s
 from `dpm-sdk` rather than being restated here, because a field present in one copy and missing
 from the other yields a valid signature over the wrong digest — no error, just an order that can
 never settle. The domain name is the SDK's `EXCHANGE_DOMAIN_NAME` constant and is not
@@ -301,7 +306,9 @@ These differ from `docs/TECHNICAL-SPEC.md`, recorded here because the spec is th
    here.
 2. **Outbound auth uses `X-Builder-Api-Private-Key`, not `X-Builder-Api-Key`.** The latter is a
    publishable key safe to ship to a browser and cannot authenticate a backend. `relayer-api`
-   gained a private-key credential (`builder_api_private_keys`) for this caller.
+   gained a private-key credential (`builder_api_private_keys`) for this caller, and on `POST
+   /submit` it pairs that key with `X-Builder-Address` so a builder can only relay for the
+   addresses it registered.
 3. **Treasury endpoints require chain parameters in the request.** The spec implies the service
    resolves the nonce and gas itself, which it cannot: configuring an RPC provider is exactly what
    §2.3 rules out to keep the service balance-agnostic.
