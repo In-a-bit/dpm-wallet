@@ -636,7 +636,7 @@ Rebalancing between the master and a user wallet, and master → external transf
 
 ## 10. HTTP API
 
-Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `DPMW_API_KEY` ([Section 12](#12-security)) — this is the operator gateway's key *into* the `dpmw`, unrelated to the builder key the `dpmw` sends *out* to `relayer-api` (§7.4). All bodies are validated with zod; a validation failure returns `400` with the error envelope. All responses are JSON.
+Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `DPMW_API_KEY` ([Section 12](#12-security)) — this is the operator gateway's key *into* the `dpmw`, unrelated to the builder key the `dpmw` sends *out* to `relayer-api` (§7.4). All bodies are validated by the app-wide `ValidationPipe` against the controllers' DTOs; a validation failure returns `400` with the error envelope. All responses are JSON. An OpenAPI description of everything below is generated from those DTOs and served at `/v1/docs`.
 
 ### 10.1 Error envelope
 
@@ -648,7 +648,7 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `
 | Code                      | HTTP | Meaning                                                                                                                            |
 | ------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `UNAUTHORIZED`            | 401  | Missing/invalid API key.                                                                                                           |
-| `VALIDATION_FAILED`       | 400  | zod validation error.                                                                                                              |
+| `VALIDATION_FAILED`       | 400  | Request body or query failed DTO validation.                                                                                       |
 | `VAULT_NOT_INITIALIZED`   | 409  | Master not yet created.                                                                                                            |
 | `ADDRESS_NOT_FOUND`       | 404  | Unknown customer ref / address.                                                                                                    |
 | `CUSTOMER_NOT_REGISTERED` | 409  | EOA not yet registered with DPM; relay-payload unavailable.                                                                        |
@@ -867,7 +867,7 @@ Everything else once considered for a later phase is now **out of scope permanen
 
 ## 14. Data model (SQLite)
 
-Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a persistent Docker volume. One database file, migrated on boot.
+Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a persistent Docker volume. One database file, migrated by an explicit deploy step.
 
 ### 14.1 Tables
 
@@ -948,7 +948,7 @@ Indices: `wallets_ref`, `wallets_eoa_lower`, `wallets_proxy_lower`, `wallets_ind
 
 ### 14.2 Migrations
 
-Drizzle migrations live in `src/db/migrations/` and run on boot before the HTTP server binds. WAL mode is set via `PRAGMA journal_mode=WAL` at connection open.
+Drizzle migrations live in `src/db/migrations/` and are applied by a step separate from the service, never from within its boot logic. In the image that step is the container's `CMD`, which runs `dist/db/migrate-cli` and then hands the process to the service; outside it, the operator runs `npm run db:migrate`. Keeping it in the command rather than in application code leaves it visible in the logs and overridable — the service can be started without it, and the migration run without the service. Boot asserts the schema is present and fails with the command to run if it is not. WAL mode is set via `PRAGMA journal_mode=WAL` at connection open.
 
 ### 14.3 Durability across container restarts
 
@@ -993,33 +993,36 @@ dpm-wallet/
 ├── docs/
 │   └── TECHNICAL-SPEC.md
 ├── src/
-│   ├── index.ts                 # entry: load config, run migrations, start server
+│   ├── main.ts                  # entry: create the Nest app, mount docs, listen
+│   ├── app.module.ts            # composition root + app-scoped guard/interceptor/filter/pipe
+│   ├── app.setup.ts             # global prefix, body cap, x-powered-by (shared with e2e tests)
 │   ├── config.ts                # env → typed Config (manual parse + validation)
-│   ├── app.ts                   # Express app factory + route wiring
-│   ├── http/
-│   │   ├── middleware/
-│   │   │   ├── api-key.ts        # X-API-Key
-│   │   │   ├── idempotency.ts
-│   │   │   └── error-handler.ts  # error envelope
-│   │   ├── routes/
-│   │   │   ├── vault.routes.ts
-│   │   │   ├── address.routes.ts
-│   │   │   ├── sign.routes.ts    # order + cancel
-│   │   │   ├── meta-tx.routes.ts
-│   │   │   ├── treasury.routes.ts
-│   │   │   └── audit.routes.ts
-│   │   └── dto/                  # zod schemas (request + response)
-│   ├── services/
-│   │   ├── address.service.ts
-│   │   ├── order-signer.service.ts
-│   │   ├── meta-tx.service.ts
-│   │   ├── treasury.service.ts
-│   │   └── policy.ts            # external-withdrawal allowlist / dual control
+│   ├── config.module.ts         # provides CONFIG and ENCRYPTION_KEY
+│   ├── database.module.ts       # opens the volume, exports the repositories
+│   ├── tokens.ts                # injection tokens for the non-class collaborators
+│   ├── common/
+│   │   ├── decorators/public.decorator.ts     # exempts a route from the API-key guard
+│   │   ├── guards/api-key.guard.ts            # X-API-Key, applied app-wide
+│   │   ├── guards/vault-initialized.guard.ts
+│   │   ├── interceptors/idempotency.interceptor.ts
+│   │   ├── filters/all-exceptions.filter.ts   # error envelope
+│   │   ├── pipes/ref.pipe.ts
+│   │   ├── dto/pagination.dto.ts
+│   │   └── validation/                        # class-validator decorators + pipe policy
+│   ├── addresses/               # controller + service + dto
+│   ├── sign/                    # order + cancel
+│   ├── meta-tx/
+│   ├── treasury/                # controller + service + policy + dto
+│   ├── audit/
+│   ├── health/
 │   ├── vault/
-│   │   ├── key-vault.ts         # KeyVault port + types
+│   │   ├── vault.module.ts      # custody seam; global, exports KEY_VAULT
+│   │   ├── vault.controller.ts  # init + status
+│   │   ├── vault.service.ts     # init, status, cold-start rehydration
+│   │   ├── key-vault.interface.ts  # KeyVault port + types
 │   │   ├── turnkey-vault.ts     # the only vault in phase 1; uses SignerProvider
 │   │   └── providers/
-│   │       ├── signer-provider.ts
+│   │       ├── signer-provider.interface.ts
 │   │       └── turnkey.provider.ts
 │   ├── sdk/
 │   │   ├── vault-wallet-adapter.ts  # InternalWalletPort bridge
@@ -1036,15 +1039,18 @@ dpm-wallet/
 │   │   ├── log.ts               # JSON console logging + redaction
 │   │   └── audit.ts
 │   └── startup/
-│       ├── bootstrap.ts         # rehydrate vault + directory from the volume
+│       ├── startup.service.ts   # boot hook: self-check, rehydrate, purge idempotency keys
 │       ├── self-check.ts        # EIP-712 domain digest check
-│       └── shutdown.ts          # SIGTERM: drain, close DB, WAL checkpoint
+│       └── shutdown.ts          # SIGTERM: drain, close app, WAL checkpoint
 ├── vendor/
 │   └── dpm-sdk/                 # git submodule (built in the image)
+├── test/                        # end-to-end specs (app, vault lifecycle, cold start)
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
 ├── drizzle.config.ts
+├── nest-cli.json
+├── jest.config.js
 ├── tsconfig.json
 ├── package.json
 └── README.md
@@ -1058,12 +1064,13 @@ dpm-wallet/
 | Concern         | Choice                                      | Rationale                                                                      |
 | --------------- | ------------------------------------------- | ------------------------------------------------------------------------------ |
 | Runtime         | Node ≥ 22                                   | Matches the workspace's `engines.node >= 20`; 22 for current LTS.              |
-| Language/module | TypeScript 5, ESM (`NodeNext`), `tsc` build | Matches prediction-gateway.                                                    |
-| HTTP            | Express 5                                   | Matches prediction-gateway.                                                    |
-| Validation      | zod                                         | Matches prediction-backoffice; strong DTO typing.                              |
+| Language/module | TypeScript 6, CommonJS, `nest build`        | The module format the Nest ecosystem and Jest assume, resolved with `bundler` so viem's ESM-only declarations are readable from CommonJS — see `tsconfig.json`. TypeScript stays on 6 until 7.1: 7.0 ships `tsc` without the programmatic compiler API that the Nest CLI and ts-jest both call. |
+| HTTP            | NestJS 11 on Express                        | Matches the platform's other Nest services.                                    |
+| Validation      | class-validator + class-transformer         | Nest's own DTO pipeline, driven by the app-wide `ValidationPipe`.              |
+| API docs        | `@nestjs/swagger`                           | Served at `/v1/docs`, generated from the controllers and DTOs.                 |
 | Crypto/ABI      | viem v2                                     | Matches dpm-sdk; reused via the vendored SDK.                                  |
 | DB              | SQLite + `better-sqlite3` + Drizzle         | Embedded, single-file, in-project as required; Drizzle gives typed migrations. |
-| Tests           | vitest                                      | Matches dpm-sdk.                                                               |
+| Tests           | Jest + supertest                            | Nest's default; `@nestjs/testing` boots the real module graph.                 |
 | Logging         | JSON to stdout                              | Matches prediction-gateway `log.ts`.                                           |
 
 
@@ -1150,7 +1157,7 @@ USER dpmw
 VOLUME ["/data"]
 EXPOSE 8090
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/index.js"]
+CMD ["node", "dist/main"]
 ```
 
 > Native-module caveat: `better-sqlite3` compiles a native addon. Building and running on the **same** Node major/Alpine base (as above) avoids ABI mismatches; a prebuilt binary is used when available.
@@ -1193,7 +1200,7 @@ volumes:
 ### 17.4 First-run
 
 1. Operator sets env (Turnkey credentials, contract addresses, and the master location — `internal`, or `external` with `DPMW_MASTER_ADDRESS`).
-2. Container boots, runs migrations, passes the EIP-712 self-check.
+2. The container starts: its command applies the schema, then the service boots and passes the EIP-712 self-check.
 3. Operator calls `POST /v1/vault/init` → an internal master (index 0) is created in Turnkey; an external master is recorded as non-signable (no key created).
 4. Wallet onboarding proceeds per [Section 11](#11-onboarding-sequence). If the operator needs a wallet to back Plaee's shared balance, it is created through the same `POST /v1/addresses` call as any other — there is no separate step and no reserved index.
 
@@ -1205,12 +1212,12 @@ On every subsequent boot the container rebuilds its entire working state from th
 
 Cold-start recovery: the container rebuilds vault and directory state from the SQLite volume, failing fast on any mismatch
 
-`src/startup/bootstrap.ts` runs this sequence before the HTTP server binds:
+`StartupService.onApplicationBootstrap` runs this sequence before the HTTP server binds, after Nest has constructed every provider:
 
 ```ts
 export async function bootstrap(config: Config): Promise<Runtime> {
   const db = openDatabase(config.databasePath);   // pragmas from §14.3
-  await runMigrations(db);                        // no-op when already current
+  assertSchemaPresent(db);                        // migrating is a deploy step, not a boot step
 
   const state = await vaultStateRepo.load(db);
   if (!state?.initialized) return uninitialized(db); // only /v1/health + /v1/vault/init
@@ -1231,7 +1238,7 @@ What each step recovers:
 
 | Step                      | Recovered from                     | Notes                                                                                                                                     |
 | ------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **Migrations**            | `src/db/migrations/`               | Idempotent; brings an older volume up to the current schema after an image upgrade.                                                       |
+| **Migrations**            | `src/db/migrations/`               | Idempotent; brings an older volume up to the current schema after an image upgrade. Applied by an explicit deploy step, never at boot.    |
 | **Vault state**           | `vault_state` (single row)         | Mode, Turnkey org id, master location, master address, custodian label.                                                                   |
 | **Signing keys**          | Nothing — they never left Turnkey  | The container re-reads `turnkey_org_id` and re-authenticates with the env credentials. There is no key material on the volume to recover. |
 | **Address directory**     | `wallets`                          | Refs, roles, derivation indices, EOA and proxy addresses, Turnkey account ids, `dpm_registered` flags.                                    |

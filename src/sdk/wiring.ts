@@ -10,7 +10,7 @@ import {
   type SubmitTransactionRequest,
 } from "@inabit-com/dpm-sdk/server";
 
-import type { Config } from "../config.js";
+import type { Config } from "../config";
 
 /**
  * The five meta-transaction kinds the service can sign. Both the route table and the

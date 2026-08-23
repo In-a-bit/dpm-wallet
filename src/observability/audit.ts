@@ -1,11 +1,13 @@
-import type {
-  AuditOutcome,
-  AuditPage,
-  AuditQuery,
+import { Injectable } from "@nestjs/common";
+
+import {
   AuditRepository,
-} from "../db/repositories/audit.repo.js";
-import type { AuditAction } from "./audit-action.js";
-import { logInfo, redact } from "./log.js";
+  type AuditOutcome,
+  type AuditPage,
+  type AuditQuery,
+} from "../db/repositories/audit.repo";
+import type { AuditAction } from "./audit-action";
+import { logInfo, redact } from "./log";
 
 export type AuditEntry = {
   ref?: string | null;
@@ -19,11 +21,9 @@ export type AuditEntry = {
  * whatever log pipeline the operator runs). Detail passes through the same redaction the
  * logger uses, so a signature or credential cannot reach the stored row either.
  */
+@Injectable()
 export class AuditLog {
-  constructor(
-    private readonly repository: AuditRepository,
-    private readonly now: () => string = () => new Date().toISOString(),
-  ) {}
+  constructor(private readonly repository: AuditRepository) {}
 
   record(entry: AuditEntry): void {
     const detail = entry.detail ? (redact(entry.detail) as Record<string, unknown>) : undefined;
@@ -32,7 +32,7 @@ export class AuditLog {
       action: entry.action,
       outcome: entry.outcome,
       ...(detail ? { detail } : {}),
-      createdAt: this.now(),
+      createdAt: new Date().toISOString(),
     });
     logInfo(entry.action, { ref: entry.ref ?? undefined, outcome: entry.outcome, ...detail });
   }

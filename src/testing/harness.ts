@@ -1,16 +1,23 @@
-import http, { type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { INestApplication } from "@nestjs/common";
+import type { NestExpressApplication } from "@nestjs/platform-express";
+import { Test } from "@nestjs/testing";
+import request from "supertest";
 
-import { createApp } from "../app.js";
-import { loadConfig } from "../config.js";
-import { closeDatabase } from "../db/client.js";
-import type { Runtime } from "../runtime.js";
-import { bootstrap } from "../startup/bootstrap.js";
-import { API_KEY_HEADER } from "../http/middleware/api-key.js";
-import { IDEMPOTENCY_KEY_HEADER } from "../http/middleware/idempotency.js";
-import { FakeDpmApi } from "./fake-dpm-api.js";
-import { FakeSignerProvider } from "./fake-signer-provider.js";
-import { TEST_API_KEY, testEnv } from "./env.js";
+import { AppModule } from "../app.module";
+import { configureApp } from "../app.setup";
+import { loadConfig } from "../config";
+import { API_KEY_HEADER } from "../common/guards/api-key.guard";
+import { IDEMPOTENCY_KEY_HEADER } from "../common/interceptors/idempotency.interceptor";
+import type { Db } from "../db/client";
+import { runMigrations } from "../db/migrate";
+import { VaultStateRepository } from "../db/repositories/vault-state.repo";
+import { WalletRepository } from "../db/repositories/wallet.repo";
+import { AuditLog } from "../observability/audit";
+import { CONFIG, DB, DPM_API, SIGNER_PROVIDER } from "../tokens";
+import { TurnkeyKeyVault } from "../vault/turnkey-vault";
+import { FakeDpmApi } from "./fake-dpm-api";
+import { FakeSignerProvider } from "./fake-signer-provider";
+import { TEST_API_KEY, testEnv } from "./env";
 
 export type RequestOptions = {
   body?: unknown;
@@ -24,9 +31,16 @@ export type HttpResult<T = any> = {
 };
 
 export type Harness = {
-  runtime: Runtime;
+  /** The Nest container, for a collaborator not surfaced below. */
+  app: INestApplication;
   provider: FakeSignerProvider;
   dpmApi: FakeDpmApi;
+  /** Resolved out of the container, so a test asserts against the instance the app is using. */
+  vaultState: VaultStateRepository;
+  wallets: WalletRepository;
+  audit: AuditLog;
+  vault: TurnkeyKeyVault;
+  db: Db;
   get: <T = any>(path: string, options?: RequestOptions) => Promise<HttpResult<T>>;
   post: <T = any>(path: string, options?: RequestOptions) => Promise<HttpResult<T>>;
   close: () => Promise<void>;
@@ -38,9 +52,13 @@ export type HarnessOptions = {
 };
 
 /**
- * Boots the real app against an in-memory database and a local signer, listening on an ephemeral
- * port. Going over real HTTP means a test exercises the actual middleware chain, migrations, and
- * repositories rather than a hand-wired subset.
+ * Boots the real application against an in-memory database and a local signer. Only the two
+ * outbound collaborators are replaced, so a test exercises the actual guards, interceptor,
+ * validation pipe, exception filter, migrations and repositories rather than a hand-wired
+ * subset.
+ *
+ * A reboot test that reuses a `databasePath` will find the schema already applied, because
+ * migrating is idempotent.
  */
 export async function startHarness(
   overrides: Record<string, string> = {},
@@ -51,37 +69,64 @@ export async function startHarness(
   // The same mnemonic on both fakes, because the master account the sub-organisation call
   // creates has to be one the signer holds — as it is in the real pair.
   const dpmApi = options.dpmApi ?? new FakeDpmApi(mnemonic);
-  const runtime = await bootstrap(loadConfig(testEnv(env)), { provider, dpmApi });
-  const server = await listen(createApp(runtime));
-  const baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
-  // Captured before any test stubs the global, so stubbing fetch to exercise an upstream failure
-  // cannot accidentally intercept the harness's own requests to the app.
-  const realFetch = globalThis.fetch;
+
+  const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
+    .overrideProvider(CONFIG)
+    .useValue(loadConfig(testEnv(env)))
+    .overrideProvider(SIGNER_PROVIDER)
+    .useValue(provider)
+    .overrideProvider(DPM_API)
+    .useValue(dpmApi)
+    .compile();
+
+  const app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
+  configureApp(app);
+  // The service no longer migrates itself, so a test applies the schema the way a deploy does:
+  // after the volume is open, before anything boots against it.
+  runMigrations(app.get<Db>(DB));
+  await initOrClose(app);
 
   const send = async <T>(
-    method: string,
+    method: "get" | "post",
     path: string,
-    options: RequestOptions = {},
+    requestOptions: RequestOptions = {},
   ): Promise<HttpResult<T>> => {
-    const response = await realFetch(`${baseUrl}${path}`, {
-      method,
-      headers: buildHeaders(options),
-      ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
-    });
-    return { status: response.status, body: (await parseBody(response)) as T };
+    const call = request(app.getHttpServer())[method](path);
+    for (const [header, value] of Object.entries(buildHeaders(requestOptions))) {
+      void call.set(header, value);
+    }
+    const response = await (requestOptions.body === undefined
+      ? call.send()
+      : call.send(requestOptions.body as object));
+    return { status: response.status, body: response.body as T };
   };
 
   return {
-    runtime,
+    app,
     provider,
     dpmApi,
-    get: (path, options) => send("GET", path, options),
-    post: (path, options) => send("POST", path, options),
-    close: async () => {
-      await closeServer(server);
-      closeDatabase(runtime.db);
-    },
+    vaultState: app.get(VaultStateRepository),
+    wallets: app.get(WalletRepository),
+    audit: app.get(AuditLog),
+    vault: app.get(TurnkeyKeyVault),
+    db: app.get<Db>(DB),
+    get: (path, requestOptions) => send("get", path, requestOptions),
+    post: (path, requestOptions) => send("post", path, requestOptions),
+    close: () => app.close(),
   };
+}
+
+/**
+ * A boot that fails during rehydration still holds the volume's write lock, so the container
+ * has to be torn down before the failure is re-thrown to the test.
+ */
+async function initOrClose(app: INestApplication): Promise<void> {
+  try {
+    await app.init();
+  } catch (err) {
+    await app.close().catch(() => undefined);
+    throw err;
+  }
 }
 
 function buildHeaders(options: RequestOptions): Record<string, string> {
@@ -90,25 +135,4 @@ function buildHeaders(options: RequestOptions): Record<string, string> {
   if (apiKey !== null) headers[API_KEY_HEADER] = apiKey;
   if (options.idempotencyKey) headers[IDEMPOTENCY_KEY_HEADER] = options.idempotencyKey;
   return headers;
-}
-
-async function parseBody(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return undefined;
-  try {
-    return JSON.parse(text);
-  } catch {
-    return text;
-  }
-}
-
-function listen(app: ReturnType<typeof createApp>): Promise<Server> {
-  const server = http.createServer(app);
-  return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server)));
-}
-
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) =>
-    server.close((err) => (err ? reject(err) : resolve())),
-  );
 }

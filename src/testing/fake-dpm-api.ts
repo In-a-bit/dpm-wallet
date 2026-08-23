@@ -2,8 +2,8 @@ import type {
   CreateSubOrganizationRequest,
   SubOrganization,
   SubOrganizationCreator,
-} from "../clients/dpm-api.client.js";
-import { createHeldAccount, TEST_MNEMONIC } from "./fake-signer-provider.js";
+} from "../clients/dpm-api.client";
+import { createHeldAccount, TEST_MNEMONIC } from "./fake-signer-provider";
 
 /**
  * Stands in for dpm-api's sub-organisation endpoint, including the two things that matter

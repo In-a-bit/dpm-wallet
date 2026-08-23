@@ -2,19 +2,31 @@
   "compilerOptions": {
     "target": "ES2022",
     "lib": ["ES2022"],
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
-    "types": ["node"],
+    // Nest and Jest both assume CommonJS, so that is what we emit. `bundler` resolution is the
+    // part that makes that work: viem publishes a working CommonJS build but only ESM-flavoured
+    // declarations (`_types` is `"type": "module"`, with no `.d.cts`), so `node16` reads its types
+    // as ESM and refuses them from a `require` context. `bundler` reads package `exports` without
+    // tying the declaration's format to ours — the pairing TypeScript 6 introduced for projects
+    // leaving the now-removed `node10` resolution, and what lets us drop `baseUrl` and `paths`.
+    "module": "commonjs",
+    "moduleResolution": "bundler",
+    "types": ["node", "jest"],
+    "rootDir": ".",
     "outDir": "dist",
-    "rootDir": "src",
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noEmitOnError": true,
+    "declaration": false,
+    "incremental": true,
     "sourceMap": true
   },
-  "include": ["src/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "exclude": ["node_modules", "dist"]
 }

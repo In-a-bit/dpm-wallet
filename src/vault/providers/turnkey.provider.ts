@@ -1,15 +1,15 @@
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { getAddress, type Address, type Hex } from "viem";
 
-import type { Config } from "../../config.js";
-import { DpmwError } from "../../errors.js";
-import { logDebug } from "../../observability/log.js";
+import type { Config } from "../../config";
+import { DpmwError } from "../../errors";
+import { logDebug } from "../../observability/log";
 import type {
   ProviderAccount,
   ProviderCredentials,
   SignerProvider,
   SigningIntent,
-} from "./signer-provider.interface.js";
+} from "./signer-provider.interface";
 
 const ETHEREUM_ACCOUNT = {
   curve: "CURVE_SECP256K1",

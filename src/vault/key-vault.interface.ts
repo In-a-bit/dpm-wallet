@@ -1,6 +1,6 @@
 import type { Address, Hex, TransactionSerializable, TypedDataDefinition } from "viem";
 
-import type { VaultMode } from "../config.js";
+import type { VaultMode } from "../config";
 
 export type MasterInfo = {
   address: Address;

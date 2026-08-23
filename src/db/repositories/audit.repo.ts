@@ -1,7 +1,9 @@
+import { Inject, Injectable } from "@nestjs/common";
 import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
 
-import type { Db } from "../client.js";
-import { auditEvents, type AuditEventRow } from "../schema.js";
+import type { Db } from "../client";
+import { DB } from "../../tokens";
+import { auditEvents, type AuditEventRow } from "../schema";
 
 export type AuditOutcome = "success" | "failure";
 
@@ -36,8 +38,9 @@ export type AuditPage = {
   total: number;
 };
 
+@Injectable()
 export class AuditRepository {
-  constructor(private readonly db: Db) {}
+  constructor(@Inject(DB) private readonly db: Db) {}
 
   record(event: NewAuditEvent): void {
     this.db

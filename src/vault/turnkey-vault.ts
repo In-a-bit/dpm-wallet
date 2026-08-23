@@ -1,3 +1,4 @@
+import { Inject, Injectable } from "@nestjs/common";
 import {
   hashMessage,
   hashTypedData,
@@ -10,15 +11,16 @@ import {
   type TypedDataDefinition,
 } from "viem";
 
-import type { VaultMode } from "../config.js";
+import type { VaultMode } from "../config";
+import { SIGNER_PROVIDER } from "../tokens";
 import {
   derivationPath,
   type KeyVault,
   type MasterInfo,
   type VaultAccount,
   type VaultHealth,
-} from "./key-vault.interface.js";
-import type { SigningIntent, SignerProvider } from "./providers/signer-provider.interface.js";
+} from "./key-vault.interface";
+import type { SigningIntent, SignerProvider } from "./providers/signer-provider.interface";
 
 export type TurnkeyVaultState = {
   /** This install's own Turnkey sub-organisation. */
@@ -32,12 +34,13 @@ export type TurnkeyVaultState = {
  * The only vault in phase 1. It owns no key material: every signature is a request to the
  * `SignerProvider`, and this class's job is to produce the right digest for it.
  */
+@Injectable()
 export class TurnkeyKeyVault implements KeyVault {
   readonly mode: VaultMode = "turnkey";
 
   private state: TurnkeyVaultState | undefined;
 
-  constructor(private readonly provider: SignerProvider) {}
+  constructor(@Inject(SIGNER_PROVIDER) private readonly provider: SignerProvider) {}
 
   /**
    * Takes on the sub-organisation, its HD wallet and its master account — all three created

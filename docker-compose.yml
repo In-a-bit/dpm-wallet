@@ -1,4 +1,5 @@
 services:
+  # Migrations run from the image's CMD, before the service starts — see the Dockerfile.
   dpm-wallet:
     build: .
     ports: ["8090:8090"]

@@ -1,9 +1,9 @@
 import { getAddress, isAddress, type Address } from "viem";
 
-import type { Config } from "../config.js";
-import { DpmwError } from "../errors.js";
-import { logInfo } from "../observability/log.js";
-import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch.js";
+import type { Config } from "../config";
+import { DpmwError } from "../errors";
+import { logInfo } from "../observability/log";
+import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
 
 /** The header a liquidity-provider install authenticates with instead of a builder secret. */
 export const LP_API_KEY_HEADER = "X-LP-Api-Key";

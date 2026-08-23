@@ -61,10 +61,7 @@ export function unauthorized(message = "Missing or invalid API key"): DpmwError 
   return new DpmwError("UNAUTHORIZED", message);
 }
 
-export function validationFailed(
-  message: string,
-  details?: Record<string, unknown>,
-): DpmwError {
+export function validationFailed(message: string, details?: Record<string, unknown>): DpmwError {
   return new DpmwError("VALIDATION_FAILED", message, details ? { details } : undefined);
 }
 
@@ -100,9 +97,6 @@ export function customerNotRegistered(ref: string): DpmwError {
   );
 }
 
-export function policyViolation(
-  message: string,
-  details?: Record<string, unknown>,
-): DpmwError {
+export function policyViolation(message: string, details?: Record<string, unknown>): DpmwError {
   return new DpmwError("POLICY_VIOLATION", message, details ? { details } : undefined);
 }

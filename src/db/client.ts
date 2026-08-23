@@ -4,8 +4,8 @@ import { dirname } from "node:path";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
-import { logInfo } from "../observability/log.js";
-import * as schema from "./schema.js";
+import { logInfo } from "../observability/log";
+import * as schema from "./schema";
 
 export type Db = BetterSQLite3Database<typeof schema> & { $client: Database.Database };
 

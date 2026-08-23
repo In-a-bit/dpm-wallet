@@ -1,8 +1,10 @@
+import { Inject, Injectable } from "@nestjs/common";
 import { asc, eq, sql } from "drizzle-orm";
 import { getAddress, type Address } from "viem";
 
-import type { Db } from "../client.js";
-import { wallets, type WalletRow } from "../schema.js";
+import type { Db } from "../client";
+import { DB } from "../../tokens";
+import { wallets, type WalletRow } from "../schema";
 
 /** The only two roles the service recognises; see §6.3 of the spec. */
 export type WalletRole = "master" | "user";
@@ -41,8 +43,9 @@ export type WalletPage = {
   total: number;
 };
 
+@Injectable()
 export class WalletRepository {
-  constructor(private readonly db: Db) {}
+  constructor(@Inject(DB) private readonly db: Db) {}
 
   findByRef(ref: string): Wallet | undefined {
     const [row] = this.db.select().from(wallets).where(eq(wallets.ref, ref)).all();
@@ -137,7 +140,10 @@ export class WalletRepository {
   }
 
   private count(): number {
-    const [row] = this.db.select({ total: sql<number>`COUNT(*)` }).from(wallets).all();
+    const [row] = this.db
+      .select({ total: sql<number>`COUNT(*)` })
+      .from(wallets)
+      .all();
     return row?.total ?? 0;
   }
 }

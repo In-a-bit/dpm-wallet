@@ -1,8 +1,8 @@
 import type { Server } from "node:http";
 
-import { closeDatabase } from "../db/client.js";
-import { logError, logInfo } from "../observability/log.js";
-import type { Runtime } from "../runtime.js";
+import type { INestApplication } from "@nestjs/common";
+
+import { logError, logInfo } from "../observability/log";
 
 const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 
@@ -10,13 +10,17 @@ const SIGNALS = ["SIGTERM", "SIGINT"] as const;
 const DRAIN_TIMEOUT_MS = 25_000;
 
 /**
- * Stops accepting connections, lets in-flight signing finish, then closes the database — which
- * runs a final WAL checkpoint and folds the -wal contents back into the main file.
+ * Stops accepting connections, lets in-flight signing finish, then closes the app — which runs
+ * the shutdown hooks, and with them the final WAL checkpoint that folds the -wal contents back
+ * into the main database file.
  *
  * Not required for correctness: signing holds no state across requests, and SQLite replays the
  * WAL on the next open. It just leaves the volume holding one self-contained file.
+ *
+ * Nest's own `enableShutdownHooks` is deliberately not used: it closes the server immediately
+ * on a signal, with no drain window for a signature already in flight.
  */
-export function installShutdownHandlers(server: Server, runtime: Runtime): void {
+export function installShutdownHandlers(app: INestApplication): void {
   let shuttingDown = false;
 
   for (const signal of SIGNALS) {
@@ -24,15 +28,15 @@ export function installShutdownHandlers(server: Server, runtime: Runtime): void 
       if (shuttingDown) return;
       shuttingDown = true;
       logInfo("shutdown.started", { signal });
-      void drainAndExit(server, runtime);
+      void drainAndExit(app);
     });
   }
 }
 
-async function drainAndExit(server: Server, runtime: Runtime): Promise<void> {
+async function drainAndExit(app: INestApplication): Promise<void> {
   try {
-    await closeServer(server);
-    closeDatabase(runtime.db);
+    await closeServer(app.getHttpServer() as Server);
+    await app.close();
     logInfo("shutdown.complete");
     process.exit(0);
   } catch (err) {

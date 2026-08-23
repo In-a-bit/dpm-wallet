@@ -2,6 +2,10 @@
 #
 # Single image an operator runs inside their own infrastructure. Listens on 0.0.0.0:8090;
 # probe GET /v1/health. The SQLite database lives on the /data volume, never in the image.
+#
+# Starting the container migrates the volume first (see CMD). That step lives here rather than
+# in the service, so it is visible in the image and can be skipped by overriding the command —
+# `docker run … node dist/main` starts without touching the schema.
 
 ARG NODE_VERSION=22
 
@@ -18,8 +22,9 @@ COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
-COPY tsconfig.json tsconfig.build.json ./
-COPY scripts/ scripts/
+# nest-cli.json drives the build: it selects tsconfig.build.json and copies the SQL migrations
+# into dist as build assets.
+COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src/ src/
 
 RUN npm run build
@@ -52,4 +57,7 @@ VOLUME ["/data"]
 EXPOSE 8090
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["node", "dist/index.js"]
+# Migrate, then hand the process over to the service. `exec` matters: without it the shell stays
+# as tini's child and the service never sees SIGTERM, which would cost the 25s drain on shutdown.
+# `&&` matters too — a failed migration must stop the boot rather than start against a stale schema.
+CMD ["sh", "-c", "node dist/db/migrate-cli && exec node dist/main"]

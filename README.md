@@ -238,9 +238,21 @@ the custody backend in both directions:
 Mount the **directory**, not the file: SQLite's WAL mode writes `-wal` and `-shm` siblings.
 
 Migrations are tracked, not replayed. Drizzle records each applied migration's hash in
-`__drizzle_migrations` and runs only what is missing, so boot against an existing volume applies
-just the new files. The service does this itself at startup; the `db:*` scripts below are for
-authoring migrations and for inspecting a volume by hand.
+`__drizzle_migrations` and applies only what is missing, so running it against an existing volume
+applies just the new files.
+
+**Migrating is a step of its own, not something the service does to the volume on its own
+initiative.** Where that step lives depends on how you start it:
+
+- **Container.** The image's `CMD` migrates and then starts the service, so `docker compose up`
+  needs nothing extra. Because it is the command rather than application code, you can watch it in
+  the logs and opt out — `docker compose run --rm dpm-wallet node dist/main` starts without
+  touching the schema, and `… node dist/db/migrate-cli` migrates without starting.
+- **`npm`.** Nothing migrates implicitly. Run `npm run db:migrate` yourself, then start the
+  service.
+
+Either way, starting against an unmigrated volume refuses the boot and names the command to run,
+rather than failing later on a customer's first request.
 
 ## Configuration
 
@@ -263,11 +275,15 @@ rather than being handed any.
 ## Development
 
 ```bash
-npm test              # vitest
+npm test              # jest: unit specs and the end-to-end suite
+npm run test:e2e      # the end-to-end suite alone
 npm run typecheck
-npm run db:generate   # write a new SQL migration after editing src/db/schema.ts
-npm run db:migrate    # apply whatever a database is missing; the service does this at boot
-npm run db:check      # verify the migration folder is consistent
+npm run lint
+npm run db:generate     # write a new SQL migration after editing src/db/schema.ts
+npm run db:migrate      # apply whatever a database is missing (uses drizzle-kit)
+npm run db:migrate:dist # the same, from the build output — no drizzle-kit, so it also works
+                        # inside the runtime image, where the dev dependencies are gone
+npm run db:check        # verify the migration folder is consistent
 npm run db:studio     # browse the database
 ```
 

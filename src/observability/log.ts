@@ -1,4 +1,4 @@
-import { LOG_LEVELS, type LogLevel } from "../config.js";
+import { LOG_LEVELS, type LogLevel } from "../config";
 
 /**
  * Field names whose values are secrets or high-entropy artefacts. Anything matching is

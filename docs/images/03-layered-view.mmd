@@ -1,5 +1,5 @@
 flowchart TB
-  http[HTTP layer: Express routes, auth, zod validation]
+  http[HTTP layer: Nest controllers, guards, DTO validation]
   svc[Service layer: AddressService, OrderSigner, MetaTxSigner, TreasurySigner]
   sdkw[SDK wiring: VaultWalletAdapter, buildX calls]
   vaultL[Vault layer: KeyVault port + Turnkey adapter]

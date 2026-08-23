@@ -6,8 +6,8 @@ import {
 } from "@inabit-com/dpm-sdk/server";
 import { hashTypedData, type Hex, type TypedDataDefinition } from "viem";
 
-import { DpmwError } from "../errors.js";
-import { logInfo } from "../observability/log.js";
+import { DpmwError } from "../errors";
+import { logInfo } from "../observability/log";
 
 /**
  * A fixed order with fixed contract addresses, so its digest depends only on the EIP-712
@@ -41,8 +41,7 @@ const FIXTURE_EXCHANGE = "0x3333333333333333333333333333333333333333";
  * and the exchange rejects every one of them with no indication of why. Better to refuse
  * to boot than to sign thousands of orders nothing will accept.
  */
-const EXPECTED_DIGEST: Hex =
-  "0x684e57d371183a06e4731e7f45fd191973d31aef4f8a0543f6d8053d33940f02";
+const EXPECTED_DIGEST: Hex = "0x684e57d371183a06e4731e7f45fd191973d31aef4f8a0543f6d8053d33940f02";
 
 export function assertExchangeDomain(): void {
   const digest = fixtureDigest(EXCHANGE_DOMAIN_NAME);

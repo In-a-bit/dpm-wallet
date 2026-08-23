@@ -1,7 +1,7 @@
 import type { InternalWalletPort } from "@inabit-com/dpm-sdk/server";
 import type { Address } from "viem";
 
-import type { KeyVault } from "../vault/key-vault.interface.js";
+import type { KeyVault } from "../vault/key-vault.interface";
 
 /**
  * Bridges the SDK's single-wallet signing port onto the multi-wallet vault by binding one

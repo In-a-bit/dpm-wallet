@@ -1,4 +1,3 @@
-
 import { sign, mnemonicToAccount, type HDAccount } from "viem/accounts";
 import { getAddress, serializeSignature, type Address, type Hex } from "viem";
 
@@ -7,7 +6,7 @@ import type {
   ProviderCredentials,
   SignerProvider,
   SigningIntent,
-} from "../vault/providers/signer-provider.interface.js";
+} from "../vault/providers/signer-provider.interface";
 
 /** A well-known BIP-39 test vector; it holds no value on any network. */
 export const TEST_MNEMONIC = "test test test test test test test test test test test junk";
@@ -27,8 +26,7 @@ const organizations = new Map<string, Map<string, HDAccount>>();
 export function createHeldAccount(mnemonic: string, derivationPath: string): Address {
   const accounts = accountsOf(mnemonic);
   const account =
-    accounts.get(derivationPath) ??
-    mnemonicToAccount(mnemonic, { path: asHdPath(derivationPath) });
+    accounts.get(derivationPath) ?? mnemonicToAccount(mnemonic, { path: asHdPath(derivationPath) });
   accounts.set(derivationPath, account);
   return getAddress(account.address);
 }
@@ -88,9 +86,7 @@ export class FakeSignerProvider implements SignerProvider {
 
   private findByAddress(address: Address): HDAccount | undefined {
     const wanted = address.toLowerCase();
-    return [...this.accounts.values()].find(
-      (account) => account.address.toLowerCase() === wanted,
-    );
+    return [...this.accounts.values()].find((account) => account.address.toLowerCase() === wanted);
   }
 }
 

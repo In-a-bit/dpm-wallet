@@ -23,8 +23,8 @@ const CLONE_SUFFIX = "0x5af43d82803e903d91602b57fd5bf3" as const;
  * `abi.encodeWithSignature("cloneConstructor(bytes)", new bytes(0))`: the selector, the
  * offset to the single dynamic argument, and that argument's zero length.
  */
-const EMPTY_BYTES_OFFSET = `0x${(32).toString(16).padStart(64, "0")}` as Hex;
-const EMPTY_BYTES_LENGTH = `0x${"0".repeat(64)}` as Hex;
+const EMPTY_BYTES_OFFSET: Hex = `0x${(32).toString(16).padStart(64, "0")}`;
+const EMPTY_BYTES_LENGTH: Hex = `0x${"0".repeat(64)}`;
 
 const CLONE_CONSTRUCTOR_DATA = concatHex([
   toFunctionSelector("cloneConstructor(bytes)"),

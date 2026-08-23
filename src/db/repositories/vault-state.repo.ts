@@ -1,9 +1,11 @@
+import { Inject, Injectable } from "@nestjs/common";
 import { and, eq } from "drizzle-orm";
 
-import type { VaultMode } from "../../config.js";
-import { DpmwError } from "../../errors.js";
-import type { Db } from "../client.js";
-import { VAULT_STATE_ID, vaultState, type VaultStateRow } from "../schema.js";
+import type { VaultMode } from "../../config";
+import { DpmwError } from "../../errors";
+import { DB } from "../../tokens";
+import type { Db } from "../client";
+import { VAULT_STATE_ID, vaultState, type VaultStateRow } from "../schema";
 
 /**
  * The row as it is read back. The key pair is always there — the row cannot be inserted
@@ -37,8 +39,9 @@ export type InitializedVaultState = {
   masterAddress: string;
 };
 
+@Injectable()
 export class VaultStateRepository {
-  constructor(private readonly db: Db) {}
+  constructor(@Inject(DB) private readonly db: Db) {}
 
   load(): VaultStateRecord | undefined {
     const [row] = this.db.select().from(vaultState).where(eq(vaultState.id, VAULT_STATE_ID)).all();

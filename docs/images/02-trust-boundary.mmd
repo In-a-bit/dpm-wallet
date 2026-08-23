@@ -2,7 +2,7 @@ flowchart TB
   subgraph operatorInfra [Operator Infrastructure]
     gateway[Operator DPM Gateway]
     subgraph dpmw [DPM Wallet Docker Container]
-      api[Express API plus Auth]
+      api[Nest API plus Auth]
       services[Address and Signing Services]
       adapter[VaultWalletAdapter]
       sdk[vendored dpm-sdk build functions]

@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-import { DpmwError } from "../errors.js";
+import { DpmwError } from "../errors";
 
 /**
  * Encrypts the one credential this container stores on its volume: the Turnkey API
