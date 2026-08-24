@@ -35,7 +35,10 @@ export class MetaTxController {
   @Post("redeem")
   @HttpCode(HttpStatus.OK)
   redeem(@Body() body: MetaTxRedeemDto): Promise<SubmitTransactionRequest> {
-    return this.build("redeem", body.ref, { conditionId: body.conditionId });
+    return this.build("redeem", body.ref, {
+      conditionId: body.conditionId,
+      recipient: body.recipient,
+    });
   }
 
   @Post("split")

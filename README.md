@@ -55,7 +55,7 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 | `POST` | `/v1/sign/order` | EIP-712 CLOB order signature |
 | `POST` | `/v1/sign/cancel` | EIP-191 cancellation signature |
 | `POST` | `/v1/meta-tx/allowance` | Approve USDC + CTF for the exchange |
-| `POST` | `/v1/meta-tx/redeem` | Redeem resolved positions |
+| `POST` | `/v1/meta-tx/redeem` | Redeem resolved positions, optionally forwarding the payout to a recipient |
 | `POST` | `/v1/meta-tx/split` | Split collateral into outcome tokens |
 | `POST` | `/v1/meta-tx/merge` | Merge outcome tokens back to collateral |
 | `POST` | `/v1/meta-tx/withdraw` | Withdraw collateral from the proxy |
@@ -114,6 +114,7 @@ the platform through `prediction-gateway`, never a backend service directly.
 | 4. Record that it is registered | `POST /v1/addresses/:ref/dpm-registered` |
 | 5. Approve the exchange | `POST /v1/meta-tx/allowance` `{ ref }`, then relay the returned body |
 | 6. Relay it | `POST /api/prediction/relayer/submit` with `X-Builder-Api-Private-Key` and `X-Builder-Address: <the EOA>` |
+| 7. Trade | `POST /v1/sign/order` `{ ref, maker: <the proxy>, … }`, then `POST /api/prediction/clob/order` with the same header pair |
 
 The attestation is an EIP-191 signature over the SDK's `LP_ATTESTATION_MESSAGE`, the same fixed
 string the LP onboarding path uses. It carries no address of its own: `gamma-api` recovers the
@@ -123,10 +124,12 @@ claim. Step 3 is idempotent per address, so a lost response can be retried.
 Step 5 needs no separate proxy deployment. `ProxyWalletFactory.proxy()` deploys the CREATE2 clone
 on its first relayed call, which is the allowance batch.
 
-Step 6 pairs the builder secret key with `X-Builder-Address`, and `relayer-api` relays only if that
-address is one the calling builder registered in step 3. That pairing is why a custody operator does
-not need the `poly_*` HMAC headers: those authenticate against one secret shared by every caller and
-would let any holder name any address.
+Steps 6 and 7 pair the builder secret key with `X-Builder-Address`, and the platform acts only if
+that address is one the calling builder registered in step 3. It is the same shape as the `X-LP-*`
+pair a liquidity provider sends, and it is why a custody operator needs neither the `poly_*` HMAC
+headers on the relayer nor per-user L2 credentials on the CLOB: the `poly_*` secret is shared by
+every caller and would let any holder name any address, and L2 credentials would have to be minted
+and stored for each user separately.
 
 ### Signing
 
@@ -264,7 +267,7 @@ rather than failing later on a customer's first request.
 | `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept on the volume. Losing it loses access to the sub-organization |
 | `DATABASE_PATH` | Inside the mounted directory; defaults to `/data/dpm-wallet.sqlite` |
 | `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only |
-| `RELAYER_BUILDER_API_KEY` | Sent as `X-Builder-Api-Private-Key`; the app-level `X-API-Key` is the DPM platform's own credential and is never sent from here. It also identifies a builder-owned install to `dpm-api` |
+| `RELAYER_BUILDER_API_KEY` | Sent as `X-Builder-Api-Private-Key`, paired with `X-Builder-Address` naming the wallet being acted for; the app-level `X-API-Key` is the DPM platform's own credential and is never sent from here. It also identifies a builder-owned install to `dpm-api` |
 | `DPM_LP_API_KEY` | Set instead on a liquidity-provider install, which has no builder secret |
 | `CONTRACT_*` | What a `GET /contract-info` call would return, supplied as config to remove that outbound dependency |
 
@@ -321,10 +324,10 @@ These differ from `docs/TECHNICAL-SPEC.md`, recorded here because the spec is th
    registration call has to prove control of the address, and the key that proves it never leaves
    here.
 2. **Outbound auth uses `X-Builder-Api-Private-Key`, not `X-Builder-Api-Key`.** The latter is a
-   publishable key safe to ship to a browser and cannot authenticate a backend. `relayer-api`
-   gained a private-key credential (`builder_api_private_keys`) for this caller, and on `POST
-   /submit` it pairs that key with `X-Builder-Address` so a builder can only relay for the
-   addresses it registered.
+   publishable key safe to ship to a browser and cannot authenticate a backend. The platform
+   gained a private-key credential (`builder_api_private_keys`) for this caller, and both
+   `relayer-api` `POST /submit` and `clob-api` `POST /order` pair that key with
+   `X-Builder-Address` so a builder can only act for the addresses it registered.
 3. **Treasury endpoints require chain parameters in the request.** The spec implies the service
    resolves the nonce and gas itself, which it cannot: configuring an RPC provider is exactly what
    §2.3 rules out to keep the service balance-agnostic.

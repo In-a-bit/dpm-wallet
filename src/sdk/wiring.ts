@@ -62,6 +62,8 @@ export function buildMetaTx(
       return buildRedeemPositionsTx({
         ...base,
         conditionId: requiredField(request.conditionId, "conditionId"),
+        // Optional here, unlike withdraw: an absent recipient is a redeem-only transaction.
+        recipient: request.recipient,
       });
     case "split":
       return buildSplitPositionTx({

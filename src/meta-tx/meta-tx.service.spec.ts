@@ -1,12 +1,16 @@
 import { createProxyStructHash } from "@inabit-com/dpm-sdk/server";
 import { hashMessage, recoverAddress } from "viem";
-import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
+import { BUILDER_ADDRESS_HEADER, BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
 import { startHarness, type Harness } from "../testing/harness";
 
 const CUSTOMER = "customer-12345";
 const RELAY_ADDRESS = "0x7777777777777777777777777777777777777777";
 const RELAY_NONCE = "7";
 const CONDITION_ID = `0x${"cd".repeat(32)}`;
+const PAYOUT_RECIPIENT = "0x8888888888888888888888888888888888888888";
+/** Collateral base units the stubbed relayer quotes for a resolved condition. */
+const PAYOUT = "1250000";
+const TRANSFER_SELECTOR = "a9059cbb"; // transfer(address,uint256)
 
 const RELAY_HUB = "0xd216153c06e857Cd7F72665e0aF1D7d82172f495";
 const PROXY_FACTORY = "0xaB45c5A4B0c941a2F231C04C3f49182e1A254052";
@@ -95,6 +99,57 @@ describe("meta-transaction signing", () => {
     expect(occurrencesOf(body.data, "a22cb465")).toBe(1); // setApprovalForAll(address,bool)
   });
 
+  // A redeem without a recipient stays a single CTF call, so the transfer below is what
+  // distinguishes the two shapes the one endpoint now builds.
+  it("redeems without forwarding when no recipient is named", async () => {
+    const body = (
+      await harness.post("/v1/meta-tx/redeem", {
+        body: { ref: CUSTOMER, conditionId: CONDITION_ID },
+      })
+    ).body;
+
+    expect(body.metadata).toBe("redeem");
+    expect(occurrencesOf(body.data, TRANSFER_SELECTOR)).toBe(0);
+  });
+
+  it("forwards the quoted payout when a recipient is named", async () => {
+    stubRedeemOutcome();
+    const response = await harness.post("/v1/meta-tx/redeem", {
+      body: { ref: CUSTOMER, conditionId: CONDITION_ID, recipient: PAYOUT_RECIPIENT },
+    });
+
+    expect(response.status).toBe(200);
+    expect(response.body.metadata).toBe("redeem + transfer payout to recipient");
+    expect(occurrencesOf(response.body.data, TRANSFER_SELECTOR)).toBe(1);
+    // The extra call needs headroom the redeem-only limit does not carry.
+    expect(response.body.signatureParams.gasLimit).toBe("450000");
+  });
+
+  // The quote is read from an authenticated route, which resolves the caller from the builder
+  // secret and the address together — the secret alone reaches only the public reads.
+  it("names the acting EOA on the payout quote", async () => {
+    const quotes = stubRedeemOutcome();
+    const wallet = await harness.get(`/v1/addresses/${CUSTOMER}`);
+    await harness.post("/v1/meta-tx/redeem", {
+      body: { ref: CUSTOMER, conditionId: CONDITION_ID, recipient: PAYOUT_RECIPIENT },
+    });
+
+    const [quote] = quotes;
+    expect(quote?.url).toContain(`conditionId=${CONDITION_ID}`);
+    expect(quote?.headers.get(BUILDER_API_PRIVATE_KEY_HEADER)).toBe("bld_sk_test");
+    expect(quote?.headers.get(BUILDER_ADDRESS_HEADER)).toBe(wallet.body.address);
+  });
+
+  // Signing a transfer of a payout that will not arrive would revert the share burn with it.
+  it("refuses to forward a payout the market has not resolved", async () => {
+    stubRedeemOutcome(() => Response.json({ resolved: false, payout: "0" }));
+    const response = await harness.post("/v1/meta-tx/redeem", {
+      body: { ref: CUSTOMER, conditionId: CONDITION_ID, recipient: PAYOUT_RECIPIENT },
+    });
+
+    expect(response.status).toBe(400);
+  });
+
   it("builds each kind with its own metadata", async () => {
     const redeem = await harness.post("/v1/meta-tx/redeem", {
       body: { ref: CUSTOMER, conditionId: CONDITION_ID },
@@ -161,6 +216,30 @@ function stubRelayPayload(
     captured.push({ url, headers: new Headers(init?.headers) });
     return respond();
   };
+}
+
+/**
+ * Intercepts the payout quote the redeem-to-recipient path reads before signing, and returns
+ * the captured requests so a test can assert on how it was authenticated.
+ */
+function stubRedeemOutcome(
+  respond: () => Response = () =>
+    Response.json({
+      conditionId: CONDITION_ID,
+      proxyWallet: "0x0000000000000000000000000000000000000000",
+      resolved: true,
+      payout: PAYOUT,
+    }),
+): { url: string; headers: Headers }[] {
+  const captured: { url: string; headers: Headers }[] = [];
+  const previousFetch = globalThis.fetch;
+  globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = requestUrl(input);
+    if (!url.includes("/redeem-outcome")) return previousFetch(input, init);
+    captured.push({ url, headers: new Headers(init?.headers) });
+    return respond();
+  };
+  return captured;
 }
 
 function requestUrl(input: RequestInfo | URL): string {

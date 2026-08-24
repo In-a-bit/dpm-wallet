@@ -274,6 +274,41 @@ describe("per-kind meta-transaction arguments", () => {
     ).not.toHaveLength(0);
   });
 
+  it("leaves an omitted redeem recipient undefined so the payout stays in the proxy", async () => {
+    const body = await accept(MetaTxRedeemDto, { ref: "customer-1", conditionId: CONDITION_ID });
+    expect(body.recipient).toBeUndefined();
+  });
+
+  it("checksums a redeem recipient", async () => {
+    const body = await accept(MetaTxRedeemDto, {
+      ref: "customer-1",
+      conditionId: CONDITION_ID,
+      recipient: LOWERCASE_ADDRESS,
+    });
+    expect(body.recipient).toBe(CHECKSUMMED_ADDRESS);
+  });
+
+  it("rejects a redeem recipient that is not an address", async () => {
+    const issues = await reject(MetaTxRedeemDto, {
+      ref: "customer-1",
+      conditionId: CONDITION_ID,
+      recipient: "0xnope",
+    });
+    expect(issues).toContainEqual({ path: "recipient", message: "must be a 20-byte hex address" });
+  });
+
+  // Only redeem forwards a payout. Were split to inherit the field, a request naming a
+  // recipient would be accepted and then silently ignored by the builder.
+  it("strips a recipient from a split, which has nothing to forward", async () => {
+    const body = await accept(MetaTxSplitDto, {
+      ref: "customer-1",
+      conditionId: CONDITION_ID,
+      amountDecimal: "10",
+      recipient: CHECKSUMMED_ADDRESS,
+    });
+    expect(body).not.toHaveProperty("recipient");
+  });
+
   it("rejects a condition id that is not 32 bytes", async () => {
     const issues = await reject(MetaTxRedeemDto, { ref: "customer-1", conditionId: "0xabc" });
     expect(issues).toContainEqual({

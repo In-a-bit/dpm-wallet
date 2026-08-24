@@ -1,9 +1,13 @@
-import { RelayerError, type SubmitTransactionRequest } from "@inabit-com/dpm-sdk/server";
+import {
+  RelayerError,
+  ValidationError,
+  type SubmitTransactionRequest,
+} from "@inabit-com/dpm-sdk/server";
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { Config } from "../config";
 import type { Wallet } from "../db/repositories/wallet.repo";
-import { customerNotRegistered, DpmwError } from "../errors";
+import { customerNotRegistered, DpmwError, validationFailed } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
 import { createBuilderKeyFetch } from "../sdk/builder-key-fetch";
@@ -37,15 +41,11 @@ const UNREGISTERED_EOA_MARKER = "user not found";
  */
 @Injectable()
 export class MetaTxService {
-  private readonly common: MetaTxCommonParams;
-
   constructor(
     private readonly audit: AuditLog,
     @Inject(KEY_VAULT) private readonly vault: KeyVault,
-    @Inject(CONFIG) config: Config,
-  ) {
-    this.common = metaTxCommonParams(config, createBuilderKeyFetch(config.relayer.builderApiKey));
-  }
+    @Inject(CONFIG) private readonly config: Config,
+  ) {}
 
   async build(
     kind: MetaTxKind,
@@ -76,12 +76,24 @@ export class MetaTxService {
           proxyWallet: wallet.proxyAddress,
           ...args,
         },
-        this.common,
+        this.commonFor(wallet),
       );
     } catch (cause) {
       this.recordFailure(cause, wallet, kind);
       throw translate(cause, wallet);
     }
+  }
+
+  /**
+   * The builder credential names the wallet being acted for, so it is assembled per build
+   * rather than once: `relayer-api` resolves the caller from the secret and the address
+   * together on the reads a build makes.
+   */
+  private commonFor(wallet: Wallet): MetaTxCommonParams {
+    return metaTxCommonParams(
+      this.config,
+      createBuilderKeyFetch(this.config.relayer.builderApiKey, wallet.eoaAddress),
+    );
   }
 
   private recordFailure(cause: unknown, wallet: Wallet, kind: MetaTxKind): void {
@@ -110,6 +122,7 @@ const META_TX_AUDIT_ACTION: Record<MetaTxKind, AuditAction> = {
  */
 function translate(cause: unknown, wallet: Wallet): unknown {
   if (cause instanceof DpmwError) return cause;
+  if (cause instanceof ValidationError) return validationFailed(cause.message, fieldOf(cause));
   if (!(cause instanceof RelayerError)) return cause;
   if (mentionsUnregisteredEoa(cause)) return customerNotRegistered(wallet.ref);
   return new DpmwError("RELAYER_REQUEST_FAILED", `relay-payload failed: ${cause.message}`, {
@@ -128,4 +141,8 @@ function assertDpmRegistered(wallet: Wallet): void {
 
 function mentionsUnregisteredEoa(error: RelayerError): boolean {
   return error.message.toLowerCase().includes(UNREGISTERED_EOA_MARKER);
+}
+
+function fieldOf(error: ValidationError): Record<string, unknown> | undefined {
+  return error.field === undefined ? undefined : { field: error.field };
 }
