@@ -1,7 +1,5 @@
 import { hashMessage, recoverAddress, recoverMessageAddress, verifyTypedData } from "viem";
-import { MASTER_DERIVATION_INDEX, MASTER_REF } from "../db/repositories/wallet.repo";
 import { FakeSignerProvider } from "../testing/fake-signer-provider";
-import { derivationPath } from "./key-vault.interface";
 import { TurnkeyKeyVault } from "./turnkey-vault";
 
 const STRUCT_HASH = "0xf6d45df6ddeb59a2287f1d6fa541907c1ab607f061a5c9bf5a9a4f11c6ec4a9e";
@@ -28,10 +26,10 @@ describe("TurnkeyKeyVault", () => {
   let provider: FakeSignerProvider;
   let vault: TurnkeyKeyVault;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     provider = new FakeSignerProvider();
     vault = new TurnkeyKeyVault(provider);
-    await adoptInitializedState(vault, provider);
+    adoptInitializedState(vault, provider);
   });
 
   describe("personalSign", () => {
@@ -85,23 +83,16 @@ describe("TurnkeyKeyVault", () => {
     expect(second.address).not.toBe(first.address);
   });
 
-  it("puts the master at index 0, ahead of every user wallet", async () => {
-    const master = vault.initializedState?.master;
-    const firstUser = await vault.createAccount(1, "customer-1");
+  it("issues a distinct address from index 0 onwards", async () => {
+    const first = await vault.createAccount(0, "customer-1");
+    const second = await vault.createAccount(1, "customer-2");
 
-    expect(master?.index).toBe(MASTER_DERIVATION_INDEX);
-    expect(master?.address).not.toBe(firstUser.address);
+    expect(first.address).not.toBe(second.address);
   });
 });
 
-/**
- * Puts the vault where first init leaves it: credentials adopted, and the master account
- * that the sub-organisation call created already held by the provider.
- */
-async function adoptInitializedState(
-  vault: TurnkeyKeyVault,
-  provider: FakeSignerProvider,
-): Promise<void> {
+/** Puts the vault where first init leaves it: credentials adopted, no account derived yet. */
+function adoptInitializedState(vault: TurnkeyKeyVault, provider: FakeSignerProvider): void {
   const credentials = {
     subOrgId: "sub-org-1",
     walletId: "wallet-1",
@@ -109,14 +100,5 @@ async function adoptInitializedState(
     apiPrivateKey: "fake-private-key",
   };
   provider.adoptCredentials(credentials);
-  const master = await provider.createAccount(derivationPath(MASTER_DERIVATION_INDEX), MASTER_REF);
-  vault.adopt({
-    subOrgId: credentials.subOrgId,
-    walletId: credentials.walletId,
-    master: {
-      address: master.address,
-      index: MASTER_DERIVATION_INDEX,
-      createdAt: "2026-01-01T00:00:00.000Z",
-    },
-  });
+  vault.adopt({ subOrgId: credentials.subOrgId, walletId: credentials.walletId });
 }

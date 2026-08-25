@@ -26,14 +26,12 @@ CREATE TABLE `vault_state` (
 	`sub_org_id` text,
 	`sub_org_name` text,
 	`turnkey_wallet_id` text,
-	`master_address` text,
 	`created_at` text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE `wallets` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`ref` text NOT NULL,
-	`role` text NOT NULL,
 	`derivation_index` integer NOT NULL,
 	`eoa_address` text NOT NULL,
 	`proxy_address` text NOT NULL,

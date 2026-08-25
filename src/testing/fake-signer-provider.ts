@@ -20,10 +20,9 @@ const organizations = new Map<string, Map<string, HDAccount>>();
 
 /**
  * Derives the account at `derivationPath` and records the organisation as holding it — what
- * Turnkey does when it creates an account. Exported because the master account is created by
- * the sub-organisation call, not by this provider, so `FakeDpmApi` needs the same effect.
+ * Turnkey does when it creates an account.
  */
-export function createHeldAccount(mnemonic: string, derivationPath: string): Address {
+function createHeldAccount(mnemonic: string, derivationPath: string): Address {
   const accounts = accountsOf(mnemonic);
   const account =
     accounts.get(derivationPath) ?? mnemonicToAccount(mnemonic, { path: asHdPath(derivationPath) });

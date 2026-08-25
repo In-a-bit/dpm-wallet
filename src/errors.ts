@@ -13,7 +13,6 @@ export const ERROR_STATUS = {
   CUSTOMER_NOT_REGISTERED: 409,
   RELAYER_REQUEST_FAILED: 502,
   SIGNING_FAILED: 500,
-  POLICY_VIOLATION: 403,
   IDEMPOTENCY_CONFLICT: 409,
   INTERNAL_ERROR: 500,
 } as const;
@@ -95,8 +94,4 @@ export function customerNotRegistered(ref: string): DpmwError {
     `Wallet "${ref}" is not registered with DPM, so no relay payload is available`,
     { details: { ref } },
   );
-}
-
-export function policyViolation(message: string, details?: Record<string, unknown>): DpmwError {
-  return new DpmwError("POLICY_VIOLATION", message, details ? { details } : undefined);
 }

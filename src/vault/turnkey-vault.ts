@@ -1,22 +1,11 @@
 import { Inject, Injectable } from "@nestjs/common";
-import {
-  hashMessage,
-  hashTypedData,
-  keccak256,
-  parseSignature,
-  serializeTransaction,
-  type Address,
-  type Hex,
-  type TransactionSerializable,
-  type TypedDataDefinition,
-} from "viem";
+import { hashMessage, hashTypedData, type Address, type Hex, type TypedDataDefinition } from "viem";
 
 import type { VaultMode } from "../config";
 import { SIGNER_PROVIDER } from "../tokens";
 import {
   derivationPath,
   type KeyVault,
-  type MasterInfo,
   type VaultAccount,
   type VaultHealth,
 } from "./key-vault.interface";
@@ -27,7 +16,6 @@ export type TurnkeyVaultState = {
   subOrgId: string;
   /** The HD wallet inside that sub-org, which every account is derived from. */
   walletId: string;
-  master: MasterInfo;
 };
 
 /**
@@ -43,9 +31,9 @@ export class TurnkeyKeyVault implements KeyVault {
   constructor(@Inject(SIGNER_PROVIDER) private readonly provider: SignerProvider) {}
 
   /**
-   * Takes on the sub-organisation, its HD wallet and its master account — all three created
-   * before this class ever sees them, by dpm-api on first init and by the volume on every
-   * boot after. Nothing is created here, which is why it is safe to call on every start.
+   * Takes on the sub-organisation and its HD wallet — both created before this class ever
+   * sees them, by dpm-api on first init and by the volume on every boot after. Nothing is
+   * created here, which is why it is safe to call on every start.
    */
   adopt(state: TurnkeyVaultState): void {
     this.state = state;
@@ -75,16 +63,6 @@ export class TurnkeyKeyVault implements KeyVault {
   async personalSign(address: Address, message: Hex | string): Promise<Hex> {
     const digest = isHexString(message) ? hashMessage({ raw: message }) : hashMessage(message);
     return this.signDigest(address, digest, "eip191");
-  }
-
-  /**
-   * Signs the transaction's serialisation digest and re-serialises it with the signature,
-   * so a provider only ever needs the one raw-payload primitive.
-   */
-  async signTransaction(address: Address, tx: TransactionSerializable): Promise<Hex> {
-    const digest = keccak256(serializeTransaction(tx));
-    const signature = await this.signDigest(address, digest, "tx");
-    return serializeTransaction(tx, parseSignature(signature));
   }
 
   listAddresses(): Promise<Address[]> {

@@ -1,5 +1,3 @@
-import { getAddress, isAddress, type Address } from "viem";
-
 import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { logInfo } from "../observability/log";
@@ -13,8 +11,6 @@ export type CreateSubOrganizationRequest = {
   apiPublicKey: string;
   /** The name this install looks its HD wallet up by, so the sub-org's wallet matches. */
   walletName: string;
-  /** The path of the master account, created in the same Turnkey activity as the sub-org. */
-  masterDerivationPath: string;
 };
 
 export type SubOrganization = {
@@ -22,8 +18,6 @@ export type SubOrganization = {
   subOrgName: string;
   /** The HD wallet Turnkey created inside the sub-org; every account derives from it. */
   walletId: string;
-  /** The master account, created from `masterDerivationPath` in the same Turnkey activity. */
-  masterAddress: Address;
 };
 
 /**
@@ -50,7 +44,6 @@ export class DpmApiClient implements SubOrganizationCreator {
     const response = await this.post("/turnkey/sub-organizations", {
       api_public_key: request.apiPublicKey,
       wallet_name: request.walletName,
-      master_derivation_path: request.masterDerivationPath,
     });
     const subOrg = readSubOrganization(await parseJson(response));
     logInfo("dpm_api.sub_organization_ready", {
@@ -94,30 +87,20 @@ export class DpmApiClient implements SubOrganizationCreator {
   }
 }
 
-type SubOrganizationBody = Partial<
-  Record<"sub_org_id" | "sub_org_name" | "wallet_id" | "master_address", string>
->;
+type SubOrganizationBody = Partial<Record<"sub_org_id" | "sub_org_name" | "wallet_id", string>>;
 
 function readSubOrganization(payload: unknown): SubOrganization {
   const body = payload as SubOrganizationBody;
-  if (!body?.sub_org_id || !body.sub_org_name || !body.wallet_id || !body.master_address) {
+  if (!body?.sub_org_id || !body.sub_org_name || !body.wallet_id) {
     throw new DpmwError(
       "RELAYER_REQUEST_FAILED",
       "dpm-api returned an incomplete sub-organization",
-    );
-  }
-  if (!isAddress(body.master_address, { strict: false })) {
-    throw new DpmwError(
-      "RELAYER_REQUEST_FAILED",
-      `dpm-api returned a malformed master address: ${body.master_address}`,
     );
   }
   return {
     subOrgId: body.sub_org_id,
     subOrgName: body.sub_org_name,
     walletId: body.wallet_id,
-    // Checksummed here so the directory and the vault never disagree on casing.
-    masterAddress: getAddress(body.master_address),
   };
 }
 

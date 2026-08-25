@@ -4,13 +4,8 @@ import type { Address, Hex } from "viem";
 
 import type { Config } from "../config";
 import { deriveProxyAddress } from "../crypto/proxy-address";
-import {
-  MASTER_DERIVATION_INDEX,
-  WalletRepository,
-  type Wallet,
-  type WalletPage,
-} from "../db/repositories/wallet.repo";
-import { addressNotFound, refAlreadyExists, vaultNotInitialized } from "../errors";
+import { WalletRepository, type Wallet, type WalletPage } from "../db/repositories/wallet.repo";
+import { addressNotFound, refAlreadyExists } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
 import { CONFIG, KEY_VAULT } from "../tokens";
@@ -23,9 +18,9 @@ export type DpmAttestation = {
 };
 
 /**
- * Creates and reads user wallets. Every address this service mints is a user wallet at the
- * next free index — there is no role parameter, because an operator wallet backing a
- * shared balance is an ordinary user wallet here. The master is created only by vault init.
+ * Creates and reads wallets. Every address this service mints is the same kind of thing at
+ * the next free index: an operator wallet backing a shared balance and an end user's wallet
+ * are indistinguishable here, and carry exactly the same capabilities.
  */
 @Injectable()
 export class AddressesService {
@@ -43,7 +38,7 @@ export class AddressesService {
   ) {}
 
   create(ref: string): Promise<Wallet> {
-    return this.runExclusive(() => this.createNextUserWallet(ref));
+    return this.runExclusive(() => this.createNextWallet(ref));
   }
 
   get(ref: string): Wallet {
@@ -90,15 +85,13 @@ export class AddressesService {
     return wallet;
   }
 
-  private async createNextUserWallet(ref: string): Promise<Wallet> {
-    this.assertVaultInitialized();
+  private async createNextWallet(ref: string): Promise<Wallet> {
     if (this.wallets.findByRef(ref)) throw refAlreadyExists(ref);
 
-    const index = this.nextUserIndex();
+    const index = this.nextIndex();
     const account = await this.vault.createAccount(index, ref);
     const wallet = this.wallets.insert({
       ref,
-      role: "user",
       derivationIndex: index,
       eoaAddress: account.address,
       proxyAddress: deriveProxyAddress(account.address, this.config.contracts),
@@ -118,18 +111,9 @@ export class AddressesService {
     return wallet;
   }
 
-  /**
-   * The HTTP layer gates on this too, but the check is repeated here because index
-   * allocation is only correct relative to a master that exists: without one, index 0 is
-   * free and the first user wallet would claim the master's derivation path.
-   */
-  private assertVaultInitialized(): void {
-    if (!this.wallets.findByRole("master")) throw vaultNotInitialized();
-  }
-
-  /** User wallets start at 1; index 0 always belongs to the master. */
-  private nextUserIndex(): number {
-    return Math.max(this.wallets.maxDerivationIndex(), MASTER_DERIVATION_INDEX) + 1;
+  /** The first wallet an install issues takes index 0; the directory owns the whole tree. */
+  private nextIndex(): number {
+    return this.wallets.maxDerivationIndex() + 1;
   }
 
   /**

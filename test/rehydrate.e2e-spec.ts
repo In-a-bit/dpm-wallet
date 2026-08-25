@@ -42,16 +42,16 @@ describe("cold-start recovery", () => {
     const first = await boot();
     await first.post("/v1/vault/init");
     const created = await first.post("/v1/addresses", { body: { ref: CUSTOMER } });
-    const master = await first.get("/v1/vault/status");
+    const status = await first.get("/v1/vault/status");
     await first.close();
 
     harness = await boot();
     const restored = await harness.get(`/v1/addresses/${CUSTOMER}`);
-    const restoredMaster = await harness.get("/v1/vault/status");
+    const restoredStatus = await harness.get("/v1/vault/status");
 
     expect(restored.body).toEqual(created.body);
-    expect(restoredMaster.body.initialized).toBe(true);
-    expect(restoredMaster.body.master.address).toBe(master.body.master.address);
+    expect(restoredStatus.body.initialized).toBe(true);
+    expect(restoredStatus.body.subOrgName).toBe(status.body.subOrgName);
   });
 
   // The container holds no credential from its environment, so a restart that failed to
@@ -103,7 +103,7 @@ describe("cold-start recovery", () => {
 
     harness = await boot();
     const third = await harness.post("/v1/addresses", { body: { ref: "customer-3" } });
-    expect(third.body.index).toBe(3);
+    expect(third.body.index).toBe(2);
   });
 
   it("replays an idempotent response across a restart", async () => {

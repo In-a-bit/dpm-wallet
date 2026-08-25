@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "4377a917-809c-4aad-9b9a-53e27b3b419a",
+  "id": "8557a998-4847-4864-a62e-fd3921e3c6ac",
   "prevId": "00000000-0000-0000-0000-000000000000",
   "tables": {
     "audit_events": {
@@ -176,13 +176,6 @@
           "notNull": false,
           "autoincrement": false
         },
-        "master_address": {
-          "name": "master_address",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
         "created_at": {
           "name": "created_at",
           "type": "text",
@@ -209,13 +202,6 @@
         },
         "ref": {
           "name": "ref",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "autoincrement": false
-        },
-        "role": {
-          "name": "role",
           "type": "text",
           "primaryKey": false,
           "notNull": true,

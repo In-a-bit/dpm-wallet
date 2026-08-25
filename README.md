@@ -4,8 +4,8 @@ Operator-hosted address management and signing service for DPM prediction market
 
 Each operator runs this container inside their own infrastructure. It holds the keys for their
 customers' wallets, derives the on-chain addresses those keys control, and signs the artefacts the
-operator's backend needs — CLOB orders, cancellations, proxy meta-transactions, and treasury
-transfers. It returns signed bytes and nothing else.
+operator's backend needs — CLOB orders, cancellations, and proxy meta-transactions. It returns
+signed bytes and nothing else.
 
 Two properties shape the whole design:
 
@@ -45,9 +45,9 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/v1/health` | Liveness; the only unauthenticated route |
-| `POST` | `/v1/vault/init` | First-run Turnkey sub-organization and master wallet setup; idempotent |
-| `GET` | `/v1/vault/status` | Vault mode and master wallet info |
-| `POST` | `/v1/addresses` | Mint a user wallet at the next free index |
+| `POST` | `/v1/vault/init` | First-run Turnkey sub-organization setup; idempotent |
+| `GET` | `/v1/vault/status` | Vault mode and sub-organization name |
+| `POST` | `/v1/addresses` | Mint a wallet at the next free index |
 | `GET` | `/v1/addresses` | Paginated directory |
 | `GET` | `/v1/addresses/:ref` | One wallet by ref |
 | `POST` | `/v1/addresses/:ref/dpm-attestation` | Sign the proof of control the DPM registration call needs |
@@ -59,9 +59,6 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 | `POST` | `/v1/meta-tx/split` | Split collateral into outcome tokens |
 | `POST` | `/v1/meta-tx/merge` | Merge outcome tokens back to collateral |
 | `POST` | `/v1/meta-tx/withdraw` | Withdraw collateral from the proxy |
-| `POST` | `/v1/treasury/fund-proxy` | Signed USDC transfer from the master to a user's proxy |
-| `POST` | `/v1/treasury/external-withdraw` | Signed transfer from the master to an unmanaged address |
-| `POST` | `/v1/treasury/sweep` | Signed transfer of a stray balance from a user's EOA to the master |
 | `GET` | `/v1/audit` | Query the audit trail |
 
 ### Errors
@@ -79,7 +76,6 @@ distinct situations.
 | `REF_ALREADY_EXISTS` | 409 | That ref already has an address; refs are not reusable |
 | `CUSTOMER_NOT_REGISTERED` | 409 | The EOA is not in the DPM `users` table yet — retry after registering |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same `Idempotency-Key` replayed with a different body |
-| `POLICY_VIOLATION` | 403 | A treasury rule refused the request |
 | `RELAYER_REQUEST_FAILED` | 502 | `GET /relay-payload` did not succeed; the cause is upstream and unknown here |
 | `SIGNING_FAILED` | 500 | The custody backend refused or errored |
 | `INTERNAL_ERROR` | 500 | Unexpected; the underlying message is withheld |
@@ -88,10 +84,13 @@ distinct situations.
 
 ### Addresses
 
-A wallet is identified by an operator-chosen `ref`, which maps to a BIP-44 derivation index. Index
-0 is the master; user wallets start at 1. The index is allocated from `MAX(derivation_index)` in
-SQLite rather than from memory, so a restart can never reissue one and hand two customers the same
-address.
+A wallet is identified by an operator-chosen `ref`, which maps to a BIP-44 derivation index
+starting at 0. The index is allocated from `MAX(derivation_index)` in SQLite rather than from
+memory, so a restart can never reissue one and hand two customers the same address.
+
+There is no role. Every wallet has the same capabilities, and an operator wallet backing a shared
+balance is created exactly like an end customer's, under a `ref` of the operator's choosing. Which
+wallet plays which part is the operator's business, and this service does not model it.
 
 Each wallet has two addresses. The **EOA** is what the key controls and what signs. The **proxy**
 is the CREATE2 clone the EOA owns, which holds the funds and is the `maker` on an order. The proxy
@@ -149,50 +148,34 @@ operator can `POST` to `relayer-api` verbatim.
 
 ### Where the money is, and which endpoint moves it
 
-Every treasury rule follows from one fact: a managed EOA is a signing key, not a balance.
+A wallet's tradable balance lives in its CREATE2 proxy. Its EOA is a signing key and holds nothing
+by design, so anything that lands there arrived by mistake.
 
-| Wallet | Balance lives in | Its EOA holds |
-|---|---|---|
-| Master (index 0) | its own EOA | the treasury |
-| User (index ≥ 1) | its CREATE2 proxy | nothing, by design |
+The one movement this service signs is a proxy paying out to an address, through
+`POST /v1/meta-tx/withdraw`. It has to be a relayed call rather than a raw transaction, because
+only the RelayHub can spend from a proxy.
 
-That leaves exactly three raw-transaction movements, and each endpoint names only the far end
-because the near end is fixed:
+Funding a proxy is a plain USDC transfer from wherever the operator keeps its float, which is not
+an address this service manages. It needs no signature from here, so there is no endpoint for it.
 
-| Movement | Endpoint | Signed by |
-|---|---|---|
-| Master → a user's proxy (USDC) | `POST /v1/treasury/fund-proxy` `{ to: <ref> }` | master |
-| Master → an unmanaged address (USDC or POL) | `POST /v1/treasury/external-withdraw` `{ destination }` | master |
-| A user's EOA → master (USDC or POL) | `POST /v1/treasury/sweep` `{ from: <ref> }` | that user |
-
-There is deliberately no way to express "master pays a managed EOA". An external withdrawal to an
-address in the directory is refused with `POLICY_VIOLATION` for the same reason.
-
-The fourth movement — a user's proxy back to the master — is not a raw transaction at all. Only
-the RelayHub can spend from a proxy, so it goes through `POST /v1/meta-tx/withdraw` with the
-master's EOA as the recipient.
-
-The sweep exists only to recover assets someone sent to a signing key by mistake. Nothing credits
-a user EOA on purpose.
-
-Treasury transfers are ordinary EIP-1559 transactions. Since there is no RPC here, the operator
-supplies `nonce`, `gasLimit`, `maxFeePerGas`, and `maxPriorityFeePerGas`.
+Raw EVM transaction signing is out of scope entirely: this service signs EIP-712 orders and
+EIP-191 messages, and nothing that spends from a managed EOA directly. An EOA holds nothing by
+design, so in practice there is nothing there to spend.
 
 **Proxy wallets cannot hold the native token.** The proxy is an EIP-1167 clone of a `ProxyWallet`
-that declares no payable fallback, so a plain POL transfer to one reverts. This is why funding is
-USDC-only rather than asset-selectable. User wallets never need POL regardless: their transactions
-are relayed and the relayer pays the gas.
+that declares no payable fallback, so a plain POL transfer to one reverts. A wallet never needs
+POL regardless: its transactions are relayed and the relayer pays the gas.
 
 ### Key custody
 
 `KeyVault` is the port every signing path goes through; `TurnkeyKeyVault` is the phase-1
-implementation. All digest construction — EIP-712 hashing, EIP-191 prefixing, transaction
-serialisation — happens here, and only the final 32-byte digest crosses into the custody backend.
+implementation. All digest construction — EIP-712 hashing, EIP-191 prefixing — happens here, and
+only the final 32-byte digest crosses into the custody backend.
 That keeps the domain logic testable and makes a second provider a matter of implementing
 `SignerProvider`.
 
-The master wallet is always the vault's own account at index 0. An externally custodied master is
-not supported: every wallet this service knows about is one it can sign for.
+Every address is an account of the vault's own HD wallet. Externally custodied addresses are not
+supported: every wallet this service knows about is one it can sign for.
 
 #### Its own Turnkey sub-organization
 
@@ -206,23 +189,23 @@ call exists at all.
 Neither half of the key pair signs anything on-chain: they authorise API requests. The secp256k1
 keys behind every address never leave the TEE.
 
-`dpm-api` creates the sub-organization, its HD wallet, and the master account at index 0 in a
-single Turnkey activity, and returns all three identifiers. There is no window in which a
-sub-organization exists without the address its owner operates from, and initialization itself
-never calls Turnkey: one `dpm-api` request is the whole flow.
+`dpm-api` creates the sub-organization and its HD wallet in a single Turnkey activity, and returns
+both identifiers. The wallet arrives empty: no account is derived, because this service owns its
+derivation convention and mints every address on demand. Initialization itself never calls
+Turnkey — one `dpm-api` request is the whole flow.
 
 `POST /v1/vault/init` is idempotent by short-circuit rather than by upsert — once the state row
 says initialised it returns what is already there and writes nothing, so re-running it cannot
-append a second master row or a second audit event. On a first run it writes in two phases: the key
-pair first, then everything `dpm-api` reported, in one SQLite transaction. That order is what
-makes a crash recoverable. `dpm-api` recognises a retry by the public key it receives, so an
-attempt that died after the first phase resumes with the *same* key pair and is handed the
-sub-organization it already owns; a freshly generated pair would be refused as a second
-sub-organization for the same owner and the install could never initialise.
+append a second audit event. On a first run it writes in two phases: the key pair first, then
+everything `dpm-api` reported, in one SQLite transaction. That order is what makes a crash
+recoverable. `dpm-api` recognises a retry by the public key it receives, so an attempt that died
+after the first phase resumes with the *same* key pair and is handed the sub-organization it
+already owns; a freshly generated pair would be refused as a second sub-organization for the same
+owner and the install could never initialise.
 
 The `vault_state` row makes exactly one transition, guarded on `initialized = 0`. It identifies
-which sub-organization and which master the volume belongs to; overwriting it would silently
-repoint an install at a different key tree and orphan every address already issued.
+which sub-organization the volume belongs to; overwriting it would silently repoint an install at
+a different key tree and orphan every address already issued.
 
 ### Cold start
 
@@ -315,7 +298,8 @@ database before exit.
 
 ## Spec deviations
 
-These differ from `docs/TECHNICAL-SPEC.md`, recorded here because the spec is the review artefact:
+These differ from the design as originally specified. `docs/TECHNICAL-SPEC.md` is kept in step with
+the implementation, so each decision is recorded here instead; the wording it replaced is in git.
 
 1. **`POST /v1/addresses/:ref/dpm-registered` is new.** The spec describes the
    `wallets.dpm_registered` column without giving the operator a way to set it. Meta-transaction
@@ -328,23 +312,19 @@ These differ from `docs/TECHNICAL-SPEC.md`, recorded here because the spec is th
    gained a private-key credential (`builder_api_private_keys`) for this caller, and both
    `relayer-api` `POST /submit` and `clob-api` `POST /order` pair that key with
    `X-Builder-Address` so a builder can only act for the addresses it registered.
-3. **Treasury endpoints require chain parameters in the request.** The spec implies the service
-   resolves the nonce and gas itself, which it cannot: configuring an RPC provider is exactly what
-   §2.3 rules out to keep the service balance-agnostic.
-4. **No externally custodied master.** The spec allows one; this service does not. Every wallet it
-   records is one it holds a key for.
-5. **No external-withdrawal allowlist or dual control.** The spec gates external withdrawals on
-   both. The only rule here is that the master is the sole wallet that can reach an address
-   outside the directory, which follows from where the funds sit rather than from a configured
-   policy.
-6. **No `signing_requests` table.** The spec has it alongside `audit_events`, but it was a
+3. **No treasury endpoints and no raw transaction signing.** The spec has `rebalance` and
+   `external-withdraw`, both of which exist to move value out of a privileged central wallet.
+   There is no such wallet here, and a managed EOA is a signing key that holds nothing, so there
+   is nothing for them to move. `KeyVault` correspondingly has no `signTransaction`, and the
+   external-withdrawal allowlist and dual-control gate the spec describes are gone with it.
+4. **No wallet roles.** The spec gives index 0 a privileged central-treasury role, optionally held
+   by an external custodian. This service has neither: every wallet is an account of its own HD
+   wallet with identical capabilities, indices start at 0, and which wallet funds which is the
+   operator's decision rather than a property of the directory.
+5. **No `signing_requests` table.** The spec has it alongside `audit_events`, but it was a
    partially populated second copy of the same trail with no reader. Every signing action now
    records exactly one `audit_events` row, written by the service that performs it.
-7. **`rebalance` is split into `fund-proxy` and `sweep`.** The spec has one endpoint that moves
-   value between the master and any wallet in the directory, which would let the master credit a
-   managed EOA. Managed EOAs are signing keys and hold nothing, so the two legitimate directions
-   became separate endpoints that each name only their far end.
-8. **Turnkey credentials are earned at initialization, not configured.** The spec supplies
+6. **Turnkey credentials are earned at initialization, not configured.** The spec supplies
    `TURNKEY_ORGANIZATION_ID`, `TURNKEY_API_PUBLIC_KEY` and `TURNKEY_API_PRIVATE_KEY` as
    environment variables, which means every install is handed a credential for an organisation it
    shares. Instead each install mints its own P-256 key pair on first initialization and `dpm-api`

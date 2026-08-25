@@ -63,35 +63,35 @@ describe("dpm-wallet HTTP API", () => {
       await harness.post("/v1/vault/init");
     });
 
-    it("creates the master at index 0", async () => {
+    it("adopts the sub-organisation", async () => {
       const response = await harness.get("/v1/vault/status");
       expect(response.body).toMatchObject({ initialized: true });
-      expect(response.body.master).toMatchObject({ index: 0 });
+      expect(response.body.subOrgName).toBe("dpm-builder-1-fake-1");
     });
 
-    // Re-running init must write nothing: the state row is immutable, and a second master
-    // row would collide on the derivation-index unique index.
+    // Re-running init must write nothing: the state row is immutable and makes its one
+    // transition on the first call.
     it("is idempotent and appends no second set of records", async () => {
       const first = await harness.get("/v1/vault/status");
       const repeat = await harness.post("/v1/vault/init");
       const second = await harness.get("/v1/vault/status");
 
       expect(repeat.status).toBe(200);
-      expect(second.body.master.address).toBe(first.body.master.address);
+      expect(second.body.subOrgName).toBe(first.body.subOrgName);
 
       const audit = await harness.get("/v1/audit?action=vault.init");
       expect(audit.body.total).toBe(1);
     });
 
     describe("addresses", () => {
-      it("allocates user wallets from index 1 with a derived proxy", async () => {
+      it("allocates wallets from index 0 with a derived proxy", async () => {
         const first = await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
         const second = await harness.post("/v1/addresses", { body: { ref: "customer-2" } });
 
-        expect(first.body).toMatchObject({ ref: CUSTOMER, index: 1, dpmRegistered: false });
+        expect(first.body).toMatchObject({ ref: CUSTOMER, index: 0, dpmRegistered: false });
         expect(first.body.proxyAddress).toMatch(/^0x[0-9a-fA-F]{40}$/);
         expect(first.body.proxyAddress).not.toBe(first.body.address);
-        expect(second.body.index).toBe(2);
+        expect(second.body.index).toBe(1);
       });
 
       // Reusing a ref is a mistake on the operator's side. Returning the existing wallet

@@ -1,5 +1,4 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { getAddress } from "viem";
 
 import type { SubOrganizationCreator } from "../clients/dpm-api.client";
 import type { Config } from "../config";
@@ -9,28 +8,21 @@ import {
   encryptCredential,
   type EncryptionKey,
 } from "../crypto/credential-encryption";
-import { deriveProxyAddress } from "../crypto/proxy-address";
 import { VaultStateRepository, type VaultStateRecord } from "../db/repositories/vault-state.repo";
-import {
-  MASTER_DERIVATION_INDEX,
-  MASTER_REF,
-  WalletRepository,
-  type Wallet,
-} from "../db/repositories/wallet.repo";
+import { WalletRepository } from "../db/repositories/wallet.repo";
 import { DpmwError } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
 import { logInfo, logWarn } from "../observability/log";
 import { CONFIG, DPM_API, ENCRYPTION_KEY, SIGNER_PROVIDER, TRANSACTION } from "../tokens";
 import type { Transaction } from "../tokens";
-import { derivationPath, type MasterInfo } from "./key-vault.interface";
 import type { ProviderCredentials, SignerProvider } from "./providers/signer-provider.interface";
 import { TurnkeyKeyVault } from "./turnkey-vault";
 
 export type VaultStatus = {
   mode: string;
   initialized: boolean;
-  master?: MasterInfo;
+  subOrgName?: string;
 };
 
 /**
@@ -66,9 +58,10 @@ export class VaultService {
    * refused as a second sub-organisation for the same owner, leaving the install unable to
    * initialise at all.
    *
-   * Nothing here talks to Turnkey. The sub-org, its HD wallet and the master account at index
-   * 0 are all created in the single activity dpm-api runs, so their identifiers arrive in its
-   * response and this function only has to persist them.
+   * Nothing here talks to Turnkey. The sub-org and its HD wallet are both created in the
+   * single activity dpm-api runs, so their identifiers arrive in its response and this
+   * function only has to persist them. No account is derived yet: every address this install
+   * issues is minted on demand by `POST /v1/addresses`.
    *
    * Idempotent by short-circuit rather than by upsert: once the state row says initialised
    * this returns what is already there and writes nothing.
@@ -82,62 +75,48 @@ export class VaultService {
     const subOrg = await this.dpmApi.createSubOrganization({
       apiPublicKey: apiKeyPair.apiPublicKey,
       walletName: this.config.turnkey.walletName,
-      masterDerivationPath: derivationPath(MASTER_DERIVATION_INDEX),
     });
 
-    // Dated from the state row rather than the clock, so an install reports the same master
-    // creation time before and after a restart.
-    const master: MasterInfo = {
-      address: subOrg.masterAddress,
-      index: MASTER_DERIVATION_INDEX,
-      createdAt: state.createdAt,
-    };
     this.provider.adoptCredentials({
       subOrgId: subOrg.subOrgId,
       walletId: subOrg.walletId,
       ...apiKeyPair,
     });
-    this.vault.adopt({ subOrgId: subOrg.subOrgId, walletId: subOrg.walletId, master });
+    this.vault.adopt({ subOrgId: subOrg.subOrgId, walletId: subOrg.walletId });
 
-    // One transaction over all three writes. A failure partway through — a unique-index
-    // collision on the master row, say — would otherwise leave the vault marked initialised
-    // with no master in the directory, a state no later call can repair because the row
-    // makes its one transition here.
+    // One transaction over both writes, so the trail can never claim an initialisation the
+    // state row does not record. That row makes its one transition here, and no later call
+    // can repair a half-written result.
     this.transaction(() => {
       this.vaultState.complete({
         subOrgId: subOrg.subOrgId,
         subOrgName: subOrg.subOrgName,
         turnkeyWalletId: subOrg.walletId,
-        masterAddress: master.address,
       });
-      this.recordMaster(MASTER_REF, master.address);
       this.audit.record({
-        ref: MASTER_REF,
         action: AuditAction.VaultInit,
         outcome: "success",
-        detail: { address: master.address, index: master.index, subOrgId: subOrg.subOrgId },
+        detail: { subOrgId: subOrg.subOrgId, subOrgName: subOrg.subOrgName },
       });
     });
 
-    logInfo("vault.initialized", {
-      subOrgName: subOrg.subOrgName,
-      masterAddress: master.address,
-    });
-    return { mode: this.vault.mode, initialized: true, master };
+    logInfo("vault.initialized", { subOrgName: subOrg.subOrgName });
+    return { mode: this.vault.mode, initialized: true, subOrgName: subOrg.subOrgName };
   }
 
   /**
-   * Reports initialised only when both halves are in place: the key in the custody backend and
-   * the row on the volume. A vault holding a master that no row records is a failed init that
-   * has yet to be retried, and saying otherwise would send the operator away satisfied.
+   * Reports initialised only when both halves are in place: the sub-organisation the process
+   * holds credentials for, and the row on the volume. A vault the container adopted that no
+   * row records is a failed init that has yet to be retried, and saying otherwise would send
+   * the operator away satisfied.
    */
   status(): VaultStatus {
-    const master = this.vault.initializedState?.master;
-    const recorded = this.vaultState.load()?.initialized === true;
+    const adopted = this.vault.initializedState !== undefined;
+    const state = this.vaultState.load();
     return {
       mode: this.vault.mode,
-      initialized: recorded && master !== undefined,
-      ...(master ? { master } : {}),
+      initialized: state?.initialized === true && adopted,
+      ...(state?.subOrgName ? { subOrgName: state.subOrgName } : {}),
     };
   }
 
@@ -161,34 +140,11 @@ export class VaultService {
       return;
     }
 
-    const { credentials, master } = this.readInitializedState(state);
+    const credentials = this.readCredentials(state);
     this.provider.adoptCredentials(credentials);
-    this.vault.adopt({
-      subOrgId: credentials.subOrgId,
-      walletId: credentials.walletId,
-      master,
-    });
+    this.vault.adopt({ subOrgId: credentials.subOrgId, walletId: credentials.walletId });
     await this.assertVaultMatchesDbAddresses();
-    logInfo("startup.vault_rehydrated", {
-      subOrgName: state.subOrgName,
-      masterAddress: master.address,
-    });
-  }
-
-  /**
-   * Records the master in the directory so it can be addressed by ref like any wallet.
-   * Called only from init, inside its transaction.
-   */
-  private recordMaster(ref: string, eoaAddress: Wallet["eoaAddress"]): Wallet {
-    return this.wallets.insert({
-      ref,
-      role: "master",
-      derivationIndex: MASTER_DERIVATION_INDEX,
-      eoaAddress,
-      proxyAddress: deriveProxyAddress(eoaAddress, this.config.contracts),
-      turnkeyAccountId: null,
-      createdAt: new Date().toISOString(),
-    });
+    logInfo("startup.vault_rehydrated", { subOrgName: state.subOrgName });
   }
 
   /**
@@ -238,28 +194,18 @@ export class VaultService {
    * continued would fail every request with a confusing Turnkey error instead of naming the
    * volume as the problem.
    */
-  private readInitializedState(state: VaultStateRecord): {
-    credentials: ProviderCredentials;
-    master: MasterInfo;
-  } {
-    if (!state.subOrgId || !state.turnkeyWalletId || !state.masterAddress) {
+  private readCredentials(state: VaultStateRecord): ProviderCredentials {
+    if (!state.subOrgId || !state.turnkeyWalletId) {
       throw new DpmwError(
         "INTERNAL_ERROR",
         "VAULT_DB_MISMATCH: the vault state row is initialised but holds no sub-organization",
       );
     }
     return {
-      credentials: {
-        subOrgId: state.subOrgId,
-        walletId: state.turnkeyWalletId,
-        apiPublicKey: state.subOrgApiPublicKey,
-        apiPrivateKey: decryptCredential(this.encryptionKey, state.subOrgApiPrivateKeyEncrypted),
-      },
-      master: {
-        address: getAddress(state.masterAddress),
-        index: 0,
-        createdAt: state.createdAt,
-      },
+      subOrgId: state.subOrgId,
+      walletId: state.turnkeyWalletId,
+      apiPublicKey: state.subOrgApiPublicKey,
+      apiPrivateKey: decryptCredential(this.encryptionKey, state.subOrgApiPrivateKeyEncrypted),
     };
   }
 

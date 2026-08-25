@@ -3,16 +3,14 @@ import type {
   SubOrganization,
   SubOrganizationCreator,
 } from "../clients/dpm-api.client";
-import { createHeldAccount, TEST_MNEMONIC } from "./fake-signer-provider";
 
 /**
- * Stands in for dpm-api's sub-organisation endpoint, including the two things that matter
- * most to the install: it is keyed on the public key it receives, so a retry with the same
- * key pair gets the same sub-organisation back rather than a second one, and it creates the
- * master account as part of that call, exactly as the real Turnkey activity does.
+ * Stands in for dpm-api's sub-organisation endpoint, including the thing that matters most to
+ * the install: it is keyed on the public key it receives, so a retry with the same key pair
+ * gets the same sub-organisation back rather than a second one.
  *
- * The master is derived from the same mnemonic the fake provider signs with, so the address
- * this returns is one the install can then actually produce signatures for.
+ * It derives no account, exactly as the real Turnkey activity does not — the sub-org arrives
+ * holding an empty HD wallet, and every address is minted later by the signer provider.
  */
 export class FakeDpmApi implements SubOrganizationCreator {
   readonly requests: CreateSubOrganizationRequest[] = [];
@@ -21,8 +19,6 @@ export class FakeDpmApi implements SubOrganizationCreator {
   failWith: Error | undefined;
 
   private readonly subOrgsByPublicKey = new Map<string, SubOrganization>();
-
-  constructor(private readonly mnemonic: string = TEST_MNEMONIC) {}
 
   async createSubOrganization(request: CreateSubOrganizationRequest): Promise<SubOrganization> {
     this.requests.push(request);
@@ -36,7 +32,6 @@ export class FakeDpmApi implements SubOrganizationCreator {
       subOrgId: `fake-sub-org-${ordinal}`,
       subOrgName: `dpm-builder-1-fake-${ordinal}`,
       walletId: `fake-wallet-${ordinal}`,
-      masterAddress: createHeldAccount(this.mnemonic, request.masterDerivationPath),
     };
     this.subOrgsByPublicKey.set(request.apiPublicKey, created);
     return created;

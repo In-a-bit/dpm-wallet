@@ -14,7 +14,6 @@ import { MetaTxModule } from "./meta-tx/meta-tx.module";
 import { ObservabilityModule } from "./observability/observability.module";
 import { SignModule } from "./sign/sign.module";
 import { StartupService } from "./startup/startup.service";
-import { TreasuryModule } from "./treasury/treasury.module";
 import { VaultModule } from "./vault/vault.module";
 
 /**
@@ -33,7 +32,6 @@ import { VaultModule } from "./vault/vault.module";
     AddressesModule,
     SignModule,
     MetaTxModule,
-    TreasuryModule,
     AuditModule,
   ],
   providers: [

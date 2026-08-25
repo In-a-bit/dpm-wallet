@@ -6,20 +6,8 @@ import type { Db } from "../client";
 import { DB } from "../../tokens";
 import { wallets, type WalletRow } from "../schema";
 
-/** The only two roles the service recognises; see §6.3 of the spec. */
-export type WalletRole = "master" | "user";
-
-export const MASTER_DERIVATION_INDEX = 0;
-
-/**
- * The ref the master is addressed by, in the directory and in the custody backend alike. Both
- * sides must agree on it, so neither spells it out for itself.
- */
-export const MASTER_REF = "master";
-
 export type Wallet = {
   ref: string;
-  role: WalletRole;
   derivationIndex: number;
   eoaAddress: Address;
   proxyAddress: Address;
@@ -30,7 +18,6 @@ export type Wallet = {
 
 export type NewWallet = {
   ref: string;
-  role: WalletRole;
   derivationIndex: number;
   eoaAddress: Address;
   proxyAddress: Address;
@@ -49,31 +36,6 @@ export class WalletRepository {
 
   findByRef(ref: string): Wallet | undefined {
     const [row] = this.db.select().from(wallets).where(eq(wallets.ref, ref)).all();
-    return row ? toWallet(row) : undefined;
-  }
-
-  /** Matches on the case-insensitive index, so callers may pass any casing. */
-  findByEoa(eoaAddress: string): Wallet | undefined {
-    const [row] = this.db
-      .select()
-      .from(wallets)
-      .where(sql`lower(${wallets.eoaAddress}) = ${eoaAddress.toLowerCase()}`)
-      .all();
-    return row ? toWallet(row) : undefined;
-  }
-
-  findByProxy(proxyAddress: string): Wallet | undefined {
-    const [row] = this.db
-      .select()
-      .from(wallets)
-      .where(sql`lower(${wallets.proxyAddress}) = ${proxyAddress.toLowerCase()}`)
-      .all();
-    return row ? toWallet(row) : undefined;
-  }
-
-  /** The master row, or undefined before vault init. There is at most one. */
-  findByRole(role: WalletRole): Wallet | undefined {
-    const [row] = this.db.select().from(wallets).where(eq(wallets.role, role)).all();
     return row ? toWallet(row) : undefined;
   }
 
@@ -116,7 +78,6 @@ export class WalletRepository {
       .insert(wallets)
       .values({
         ref: wallet.ref,
-        role: wallet.role,
         derivationIndex: wallet.derivationIndex,
         eoaAddress: getAddress(wallet.eoaAddress),
         proxyAddress: getAddress(wallet.proxyAddress),
@@ -151,7 +112,6 @@ export class WalletRepository {
 function toWallet(row: WalletRow): Wallet {
   return {
     ref: row.ref,
-    role: row.role as WalletRole,
     derivationIndex: row.derivationIndex,
     eoaAddress: row.eoaAddress as Address,
     proxyAddress: row.proxyAddress as Address,

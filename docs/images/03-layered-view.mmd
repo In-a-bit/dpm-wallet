@@ -1,6 +1,6 @@
 flowchart TB
   http[HTTP layer: Nest controllers, guards, DTO validation]
-  svc[Service layer: AddressService, OrderSigner, MetaTxSigner, TreasurySigner]
+  svc[Service layer: AddressService, OrderSigner, MetaTxSigner]
   sdkw[SDK wiring: VaultWalletAdapter, buildX calls]
   vaultL[Vault layer: KeyVault port + Turnkey adapter]
   data[Data layer: SQLite via Drizzle]

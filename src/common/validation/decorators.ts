@@ -94,26 +94,6 @@ export function IsIsoTimestamp(options?: ValidationOptions) {
 }
 
 /**
- * A non-negative integer arriving as a decimal string, converted to `bigint`. The chain
- * parameters are wei-scale and would lose precision as JSON numbers, which is why the wire
- * format is a string in the first place.
- */
-export function IsBigintString(options?: ValidationOptions) {
-  return applyDecorators(
-    transformValue((value) => {
-      const text = trimmed(value);
-      return typeof text === "string" && DECIMAL_DIGITS.test(text) ? BigInt(text) : value;
-    }),
-    customValidator(
-      "isBigintString",
-      (value) => typeof value === "bigint",
-      "must be a non-negative integer",
-      options,
-    ),
-  );
-}
-
-/**
  * A page size or offset arriving as a query string.
  *
  * An omitted parameter is covered by the property's own initializer, because class-transformer

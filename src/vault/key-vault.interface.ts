@@ -1,13 +1,6 @@
-import type { Address, Hex, TransactionSerializable, TypedDataDefinition } from "viem";
+import type { Address, Hex, TypedDataDefinition } from "viem";
 
 import type { VaultMode } from "../config";
-
-export type MasterInfo = {
-  address: Address;
-  /** Always 0. The master is the first account of the vault's own HD wallet. */
-  index: 0;
-  createdAt: string;
-};
 
 export type VaultAccount = {
   address: Address;
@@ -43,9 +36,6 @@ export interface KeyVault {
 
   /** EIP-191 personal_sign, for meta-tx struct hashes and cancel messages. */
   personalSign(address: Address, message: Hex | string): Promise<Hex>;
-
-  /** Raw EVM transaction signing, for treasury. */
-  signTransaction(address: Address, tx: TransactionSerializable): Promise<Hex>;
 
   /** The addresses the custody backend currently holds, for the boot-time reconciliation. */
   listAddresses(): Promise<Address[]>;

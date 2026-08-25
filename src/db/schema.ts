@@ -22,7 +22,6 @@ export const vaultState = sqliteTable("vault_state", {
   subOrgId: text("sub_org_id"),
   subOrgName: text("sub_org_name"),
   turnkeyWalletId: text("turnkey_wallet_id"),
-  masterAddress: text("master_address"),
   createdAt: text("created_at").notNull(),
 });
 
@@ -38,7 +37,6 @@ export const wallets = sqliteTable(
   {
     id: integer("id").primaryKey({ autoIncrement: true }),
     ref: text("ref").notNull(),
-    role: text("role").notNull(),
     derivationIndex: integer("derivation_index").notNull(),
     eoaAddress: text("eoa_address").notNull(),
     proxyAddress: text("proxy_address").notNull(),
@@ -55,7 +53,7 @@ export const wallets = sqliteTable(
 );
 
 /**
- * The one audit trail: every signing action, address creation, and treasury movement, each
+ * The one audit trail: every signing action and address creation, each
  * written exactly once by the service that performs it. Append-only, and never holds a
  * usable signature — the logger truncates those before they reach a row.
  */

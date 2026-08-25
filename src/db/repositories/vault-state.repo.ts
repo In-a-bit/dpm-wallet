@@ -20,7 +20,6 @@ export type VaultStateRecord = {
   subOrgId: string | null;
   subOrgName: string | null;
   turnkeyWalletId: string | null;
-  masterAddress: string | null;
   createdAt: string;
 };
 
@@ -31,12 +30,11 @@ export type ReservedCredentials = {
   subOrgApiPrivateKeyEncrypted: string;
 };
 
-/** What dpm-api reported: the sub-org the key pair governs, and the master it holds. */
+/** What dpm-api reported: the sub-org the key pair governs, and its HD wallet. */
 export type InitializedVaultState = {
   subOrgId: string;
   subOrgName: string;
   turnkeyWalletId: string;
-  masterAddress: string;
 };
 
 @Injectable()
@@ -82,8 +80,8 @@ export class VaultStateRepository {
 
   /**
    * Phase two: the one transition this row ever makes. Guarded on `initialized = 0` so a
-   * second call cannot repoint an install at a different sub-organisation or master and
-   * orphan every address already issued.
+   * second call cannot repoint an install at a different sub-organisation and orphan every
+   * address already issued.
    */
   complete(state: InitializedVaultState): VaultStateRecord {
     const [row] = this.db
@@ -93,7 +91,6 @@ export class VaultStateRepository {
         subOrgId: state.subOrgId,
         subOrgName: state.subOrgName,
         turnkeyWalletId: state.turnkeyWalletId,
-        masterAddress: state.masterAddress,
       })
       .where(and(eq(vaultState.id, VAULT_STATE_ID), eq(vaultState.initialized, 0)))
       .returning()
@@ -118,7 +115,6 @@ function toRecord(row: VaultStateRow): VaultStateRecord {
     subOrgId: row.subOrgId ?? null,
     subOrgName: row.subOrgName ?? null,
     turnkeyWalletId: row.turnkeyWalletId ?? null,
-    masterAddress: row.masterAddress ?? null,
     createdAt: row.createdAt,
   };
 }

@@ -6,7 +6,7 @@ import type { Address, Hex } from "viem";
  * digest is identical whichever provider signs it — but providers differ in how they
  * authorise each kind, so the intent travels with the payload.
  */
-export type SigningIntent = "eip191" | "eip712" | "tx";
+export type SigningIntent = "eip191" | "eip712";
 
 /**
  * Everything this install acts with: its own Turnkey sub-organisation, the HD wallet inside

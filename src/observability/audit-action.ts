@@ -15,9 +15,6 @@ export const AuditAction = {
   MetaSplit: "meta.split",
   MetaMerge: "meta.merge",
   MetaWithdraw: "meta.withdraw",
-  TreasuryFundProxy: "treasury.fund_proxy",
-  TreasurySweep: "treasury.sweep",
-  TreasuryExternalWithdraw: "treasury.external_withdraw",
 } as const;
 
 export type AuditAction = (typeof AuditAction)[keyof typeof AuditAction];

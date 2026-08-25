@@ -66,9 +66,7 @@ export async function startHarness(
 ): Promise<Harness> {
   const { TEST_MNEMONIC: mnemonic, ...env } = overrides;
   const provider = new FakeSignerProvider(mnemonic);
-  // The same mnemonic on both fakes, because the master account the sub-organisation call
-  // creates has to be one the signer holds — as it is in the real pair.
-  const dpmApi = options.dpmApi ?? new FakeDpmApi(mnemonic);
+  const dpmApi = options.dpmApi ?? new FakeDpmApi();
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(CONFIG)

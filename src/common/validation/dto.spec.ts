@@ -12,7 +12,6 @@ import {
 } from "../../meta-tx/dto/meta-tx.dto";
 import { SignCancelDto } from "../../sign/dto/sign-cancel.dto";
 import { SignOrderDto } from "../../sign/dto/sign-order.dto";
-import { ExternalWithdrawDto, FundProxyDto, SweepDto } from "../../treasury/dto/treasury.dto";
 import { PaginationDto } from "../dto/pagination.dto";
 import { createValidationPipe } from "./validation-pipe";
 
@@ -56,13 +55,6 @@ const ORDER = {
   feeRateBps: 200,
 };
 
-const CHAIN = {
-  nonce: 3,
-  gasLimit: "300000",
-  maxFeePerGas: "60000000000",
-  maxPriorityFeePerGas: "30000000000",
-};
-
 describe("address normalisation", () => {
   it("checksums a lowercase address so a handler never sees mixed casing", async () => {
     const order = await accept(SignOrderDto, { ...ORDER, maker: LOWERCASE_ADDRESS });
@@ -81,39 +73,6 @@ describe("address normalisation", () => {
   });
 });
 
-describe("wei-scale chain parameters", () => {
-  // They arrive as strings because a JSON number would lose precision at wei scale, and they
-  // have to reach viem as bigint.
-  it("converts every fee field to a bigint", async () => {
-    const body = await accept(FundProxyDto, {
-      to: "customer-1",
-      amountDecimal: "10",
-      chain: CHAIN,
-    });
-    expect(body.chain.gasLimit).toBe(300000n);
-    expect(body.chain.maxFeePerGas).toBe(60000000000n);
-    expect(body.chain.maxPriorityFeePerGas).toBe(30000000000n);
-    expect(body.chain.nonce).toBe(3);
-  });
-
-  it("rejects a non-numeric fee and names the nested path", async () => {
-    const issues = await reject(FundProxyDto, {
-      to: "customer-1",
-      amountDecimal: "10",
-      chain: { ...CHAIN, maxFeePerGas: "lots" },
-    });
-    expect(issues).toContainEqual({
-      path: "chain.maxFeePerGas",
-      message: "must be a non-negative integer",
-    });
-  });
-
-  it("rejects a missing chain block rather than signing with undefined fees", async () => {
-    const issues = await reject(FundProxyDto, { to: "customer-1", amountDecimal: "10" });
-    expect(issues.some((issue) => issue.path === "chain")).toBe(true);
-  });
-});
-
 describe("defaults for omitted fields", () => {
   it("treats an empty dpm-registered body as a confirmation", async () => {
     expect((await accept(DpmRegisteredDto, {})).registered).toBe(true);
@@ -125,35 +84,6 @@ describe("defaults for omitted fields", () => {
 
   it("defaults a listing to the first 50 rows", async () => {
     expect(await accept(PaginationDto, {})).toEqual({ limit: 50, offset: 0 });
-  });
-
-  it("defaults a treasury movement to USDC", async () => {
-    const body = await accept(SweepDto, {
-      from: "customer-1",
-      amountDecimal: "10",
-      chain: CHAIN,
-    });
-    expect(body.asset).toBe("usdc");
-  });
-
-  it("accepts the native asset when named", async () => {
-    const body = await accept(SweepDto, {
-      from: "customer-1",
-      asset: "native",
-      amountDecimal: "10",
-      chain: CHAIN,
-    });
-    expect(body.asset).toBe("native");
-  });
-
-  it("rejects an asset that is neither", async () => {
-    const issues = await reject(SweepDto, {
-      from: "customer-1",
-      asset: "eth",
-      amountDecimal: "10",
-      chain: CHAIN,
-    });
-    expect(issues.some((issue) => issue.path === "asset")).toBe(true);
   });
 });
 
@@ -358,22 +288,5 @@ describe("audit filters", () => {
 
   it("leaves every filter optional", async () => {
     expect(await accept(AuditQueryDto, {})).toEqual({ limit: 50, offset: 0 });
-  });
-});
-
-describe("external withdrawal", () => {
-  it("checksums the destination", async () => {
-    const body = await accept(ExternalWithdrawDto, {
-      destination: LOWERCASE_ADDRESS,
-      amountDecimal: "10",
-      chain: CHAIN,
-    });
-    expect(body.destination).toBe(CHECKSUMMED_ADDRESS);
-  });
-
-  it("requires a destination", async () => {
-    expect(
-      await reject(ExternalWithdrawDto, { amountDecimal: "10", chain: CHAIN }),
-    ).not.toHaveLength(0);
   });
 });

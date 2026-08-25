@@ -9,7 +9,7 @@ Version: 0.2 (draft) · Status: for review · Owner: Plaee DPM
 The DPM Wallet (`dpmw`) is a lightweight, operator-hosted TypeScript service that does two things and nothing else:
 
 1. **Creates and manages blockchain addresses** for an operator and its customers.
-2. **Signs payloads** — trading orders, proxy meta-transactions (allowance, redeem, withdrawal), and raw treasury transactions.
+2. **Signs payloads** — trading orders and proxy meta-transactions (allowance, redeem, withdrawal).
 
 It is delivered as a single Docker image that each operator runs inside their own infrastructure. The only caller into the `dpmw` is the operator's backend (the "Operator DPM Gateway"). The `dpmw` never talks to Plaee except for one read-only call needed to assemble a meta-transaction (see [Section 5](#5-trust-boundary-and-outbound-dependencies)).
 
@@ -29,11 +29,10 @@ The service is built on top of the existing `dpm-sdk` rather than reimplementing
 
 ### 2.1 Goals (v1)
 
-- Generate and persist a **master wallet** and any number of **user wallets**.
-- Derive and return each user wallet's **on-chain proxy wallet address** without a chain round-trip.
+- Generate and persist any number of **wallets**, all with identical capabilities.
+- Derive and return each wallet's **on-chain proxy wallet address** without a chain round-trip.
 - Sign **CLOB orders** (EIP-712) and return the signed order to the operator.
 - Build and sign **proxy meta-transactions** — USDC/CTF allowance, redeem, proxy withdrawal, split, merge — and return a ready-to-submit request body to the operator.
-- Sign **raw treasury transactions** (master ↔ user wallet rebalancing, master → external) and return the signed transaction hex.
 - Maintain a **secure address directory** (wallet reference → EOA → proxy → derivation index) in an embedded database.
 - Authenticate every inbound request from the operator with an **API key**.
 - Emit **structured audit logs** for every address creation and signing action.
@@ -47,7 +46,7 @@ These appear in the product PDF but are explicitly deferred. Where the `dpmw` wi
 - **Self-custody (mnemonic) vault mode.** Phase 1 is Turnkey-only; the `KeyVault` port ([Section 6.2](#62-the-keyvault-port)) is the seam a mnemonic vault drops into later.
 - **Per-user** `recipientId` **trading ledger** (orders/fills/positions per customer).
 - **WebSocket event streaming** to PlaeeOS.
-- **Broadcasting** any transaction to Polygon. The `dpmw` signs; the operator (or Plaee) broadcasts. The single exception discussed for treasury is still sign-only in v1 — the signed hex is returned, not sent.
+- **Broadcasting** any transaction to Polygon. The `dpmw` signs; the operator (or Plaee) broadcasts.
 
 
 
@@ -56,7 +55,7 @@ These appear in the product PDF but are explicitly deferred. Where the `dpmw` wi
 - Submitting orders or meta-transactions to Plaee. The `dpmw` returns signed artefacts to the operator, who routes them onward.
 - **Any balance awareness.** The `dpmw` does not read, monitor, track, or validate balances — on-chain or otherwise. It never checks that a wallet can afford what it is signing for, and it runs no chain watcher. On-chain deposit/withdrawal monitoring and confirmation tracking belong to Plaee and the operator.
 - Holding or reconciling customer balances. That is the operator's ledger and Plaee's shared-balance DB.
-- Modelling the **operational wallet**. That is a Plaee-side *shared-balance* concept; inside the `dpmw` the address backing it is an ordinary user wallet with no special role (see [Section 6.3](#63-wallet-roles-and-the-derivation-model)).
+- Modelling the **operational wallet**. That is a Plaee-side *shared-balance* concept; inside the `dpmw` the address backing it is an ordinary wallet, indistinguishable from any other (see [Section 6.3](#63-the-derivation-model)).
 
 ---
 
@@ -138,26 +137,6 @@ A request flows top-down: the HTTP layer validates and authenticates, a service 
 ```ts
 export type VaultMode = "turnkey"; // phase 2 widens this to "turnkey" | "mnemonic"
 
-/**
- * Where the master wallet's key lives. "internal" = held by this vault (a
- * Turnkey account at index 0). "external" = held by a third-party custody
- * (Fireblocks, Qredo, MetaMask, …); the dpmw knows only its address and
- * cannot sign for it. See Section 6.6.
- */
-export type MasterLocation = "internal" | "external";
-
-export interface MasterInfo {
-  address: Address;
-  location: MasterLocation;
-  /** Present only when location === "internal". */
-  index?: 0;
-  /** For location === "external": the custody provider label (e.g. "fireblocks"). */
-  custodian?: string;
-  /** Whether this vault can produce signatures for the master address. */
-  signable: boolean;
-  createdAt: string;
-}
-
 export interface VaultAccount {
   address: Address;
   index: number;
@@ -175,13 +154,6 @@ export interface VaultHealth {
 export interface KeyVault {
   readonly mode: VaultMode;
 
-  /**
-   * First-run: establish the master wallet. When the master is internal, this
-   * creates/loads the Turnkey account at index 0. When the master is external,
-   * this records the configured address and marks it non-signable. Idempotent.
-   */
-  initializeMaster(): Promise<MasterInfo>;
-
   /** Derive/create the account at `index`, tagging it with `ref`. Idempotent per index. */
   createAccount(index: number, ref: string): Promise<VaultAccount>;
 
@@ -191,34 +163,19 @@ export interface KeyVault {
   /** EIP-191 personal_sign (meta-tx struct hash, cancel messages). */
   personalSign(address: Address, message: Hex | string): Promise<Hex>;
 
-  /**
-   * Raw EVM transaction signing (treasury). Throws MASTER_NOT_SIGNABLE when the
-   * address is an externally-custodied master wallet.
-   */
-  signTransaction(address: Address, tx: TransactionSerializable): Promise<Hex>;
-
   health(): Promise<VaultHealth>;
 }
 ```
 
 Every signing method takes an `address` and uses it to select the correct key out of many — this is what lets one process drive thousands of wallets.
 
-### 6.3 Wallet roles and the derivation model
+### 6.3 The derivation model
 
-The `dpmw` recognises exactly **two** wallet roles. Addresses are Turnkey wallet accounts at the BIP-44 path `m/44'/60'/0'/0/{index}`:
+The `dpmw` recognises **one** kind of wallet. Addresses are Turnkey wallet accounts at the BIP-44 path `m/44'/60'/0'/0/{index}`, with `index` starting at `0` and allocated in creation order via `POST /v1/addresses`. Each wallet is one EOA mapping 1:1 to a proxy wallet.
 
-
-| Index   | Role              | Notes                                                                                                                            |
-| ------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `0`     | **Master wallet** | Central treasury. Used **only when the master is internal** (see §6.6). Reserved/unused when the master is externally custodied. |
-| `1 … N` | **User wallets**  | One EOA per wallet, each mapping 1:1 to a proxy wallet. Allocated in creation order via `POST /v1/addresses`.                    |
-
-
-**"User wallet" is the only non-master role.** It covers end customers *and* any operator-owned wallet — including the address Plaee treats as the **operational wallet** for shared balance. That distinction lives entirely on the Plaee/operator side: the operator creates the wallet with its own `ref` like any other, and the `dpmw` stores, derives, and signs for it identically. There is no reserved index, no `operational` role, and no special-casing anywhere in this service.
+**Every wallet is equal.** The set covers end customers *and* any operator-owned wallet — including the address Plaee treats as the **operational wallet** for shared balance, and whichever wallet the operator funds the others from. That distinction lives entirely on the Plaee/operator side: the operator creates each wallet with its own `ref`, and the `dpmw` stores, derives, and signs for it identically. There is no role column, no reserved index, and no special-casing anywhere in this service.
 
 When an operator wants per-user policy isolation, the alternative is a Turnkey **sub-organisation per wallet**; this is documented as a configuration variant, not the default.
-
-User-wallet indices are stable regardless of where the master lives: when the master is external, index 0 is simply reserved and user wallets still begin at index 1.
 
 ### 6.4 Proxy wallet address derivation
 
@@ -236,7 +193,7 @@ This mirrors `ProxyWalletFactory` in the `proxy-factories` repo (salt is `keccak
 
 Phase 1 implements one mode. The `dpmw` holds **no private key material at all** — only the operator's Turnkey API credentials, which authorise it to *request* signatures.
 
-- On first run, when the master is **internal**, ensure a Turnkey **wallet** (or sub-organisation) exists for the master; create if absent. When the master is **external** (§6.6), skip master key creation and only record its address.
+- On first run, ensure a Turnkey **sub-organisation** and its HD wallet exist; create if absent. The wallet is created empty — no account is derived until one is asked for.
 - `createAccount(index, ref)` calls Turnkey to create the wallet account at the derivation path and returns its address.
 - Signing calls Turnkey's sign APIs (`signRawPayload` / typed-data equivalent) using `TURNKEY_API_PUBLIC_KEY` / `TURNKEY_API_PRIVATE_KEY` / `TURNKEY_ORGANIZATION_ID`.
 - Turnkey is reached through a `SignerProvider` abstraction (see [Section 8](#8-third-party-integrations)) so a different signer (Fireblocks, Qredo) can replace it.
@@ -245,30 +202,11 @@ Because no key is held locally, there is no keystore, no passphrase, and no encr
 
 The vault must reproduce the SDK's `personalSign` hex/UTF-8 branching exactly (see [Section 9.5](#95-a-required-personalsign-detail)).
 
-### 6.6 Master wallet location (internal vs external)
+### 6.6 Every address is vault-managed
 
-The vault mode and the **master wallet location** are two independent axes. User wallets are always managed by the active vault, but the master wallet — the central treasury — need not be. Per the product requirements it "can be managed natively within Turnkey or via an external enterprise custody provider (e.g., Fireblocks, Qredo)", and in practice it may also be a wallet the operator controls through MetaMask or a hardware/enterprise custodian. The `dpmw` therefore does **not** assume the master is a key it can reach.
+There is no externally custodied address. Every wallet the `dpmw` records is an account of its own HD wallet, which is what lets it sign for anything in the directory without a capability check at the call site.
 
-Two locations are supported, selected by config:
-
-
-| Location       | Who holds the key                                                | `dpmw` capability                                                                                         |
-| -------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `**internal**` | The active vault — a Turnkey master account at index 0.          | Full — the `dpmw` can sign treasury transactions from the master.                                         |
-| `**external**` | A third-party custodian (Fireblocks, Qredo, MetaMask, hardware). | Address-only — the `dpmw` records the master address for policy and reporting but **cannot sign** for it. |
-
-
-Identifying the master location is a first-run concern. At `POST /v1/vault/init` the `dpmw` resolves the master from config:
-
-- `DPMW_MASTER_LOCATION=internal` (default): the vault creates/loads the master key. `MasterInfo.signable = true`, `index = 0`.
-- `DPMW_MASTER_LOCATION=external`: `DPMW_MASTER_ADDRESS` (required) is recorded and `DPMW_MASTER_CUSTODIAN` (optional label) is stored. No key is created. `MasterInfo.signable = false`.
-
-Consequences when the master is external:
-
-- **Treasury signing that draws from the master is not performed by the** `dpmw`**.** `POST /v1/treasury/rebalance` and `POST /v1/treasury/external-withdraw` return `MASTER_NOT_SIGNABLE` for the master-signed leg; the operator executes that leg through the external custodian. Legs signed **from a user wallet** (always vault-managed) remain available — e.g. a user wallet → master sweep.
-- **Policy** ([Section 12.3](#123-treasury-policy)) still treats the master address as the only source permitted to reach external addresses.
-
-This keeps the three-tier model intact while letting the operator custody the highest-value wallet wherever they already trust it.
+An operator who custodies funds elsewhere — Fireblocks, Qredo, MetaMask, hardware — simply does not register that address here. It is then an unmanaged address like any other: the `dpmw` will name it as the recipient of a proxy withdrawal, and anything it has to sign for itself is executed through that custodian.
 
 ---
 
@@ -513,7 +451,7 @@ Domain:
 
 **Recipient is optional.** When it is omitted — or supplied as the zero address — the exchange resolves `recipient == address(0) ? maker : recipient`, so proceeds go to the **maker**. The `dpmw` encodes an omitted recipient as the zero address in the signed order (the two are equivalent on-chain), so an unset recipient always means "pay the maker".
 
-**No recipient constraint.** The `dpmw` does not validate `recipient` (or `maker`) against its address directory, against the master, or against any notion of an operational wallet. It signs the values it is given. Deciding which addresses may receive proceeds is the operator's responsibility, enforced in the operator gateway where the business context lives — the `dpmw` has neither that context nor any balance view with which to second-guess it.
+**No recipient constraint.** The `dpmw` does not validate `recipient` (or `maker`) against its address directory or against any notion of an operational wallet. It signs the values it is given. Deciding which addresses may receive proceeds is the operator's responsibility, enforced in the operator gateway where the business context lives — the `dpmw` has neither that context nor any balance view with which to second-guess it.
 
 Owned by: `buildOrderFields` + the new `buildOrderTypedData` in `clob-order.ts`; signed via `KeyVault.signTypedData`.
 
@@ -626,10 +564,6 @@ Cancel order: <orderHash> on market: <marketId>
 
 Owned by: `formatCancelOrderMessage` in `clob-order.ts`; the `dpmw` converts to hex with viem's `toHex` before signing (matching provider behaviour), then returns the signature.
 
-### 9.7 Raw treasury transaction
-
-Rebalancing between the master and a user wallet, and master → external transfers, are ordinary EVM transactions serialised and signed with `KeyVault.signTransaction`. The operator supplies `from`, `to`, and the amount; the `dpmw` does not check that `from` holds it. The `dpmw` returns the **signed transaction hex**; broadcasting is out of v1 scope. Master → external is documented as bypassing the Plaee proxy per the product security constraint.
-
 ---
 
 
@@ -649,13 +583,11 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `
 | ------------------------- | ---- | ---------------------------------------------------------------------------------------------------------------------------------- |
 | `UNAUTHORIZED`            | 401  | Missing/invalid API key.                                                                                                           |
 | `VALIDATION_FAILED`       | 400  | Request body or query failed DTO validation.                                                                                       |
-| `VAULT_NOT_INITIALIZED`   | 409  | Master not yet created.                                                                                                            |
+| `VAULT_NOT_INITIALIZED`   | 409  | Sub-organisation not yet created.                                                                                                  |
 | `ADDRESS_NOT_FOUND`       | 404  | Unknown customer ref / address.                                                                                                    |
 | `CUSTOMER_NOT_REGISTERED` | 409  | EOA not yet registered with DPM; relay-payload unavailable.                                                                        |
 | `RELAYER_UNAVAILABLE`     | 502  | `GET /relay-payload` failed.                                                                                                       |
-| `MASTER_NOT_SIGNABLE`     | 409  | The master wallet is externally custodied; the `dpmw` cannot sign that leg (see §6.6).                                             |
 | `SIGNING_FAILED`          | 500  | Vault/provider signing error.                                                                                                      |
-| `POLICY_VIOLATION`        | 403  | External treasury destination not on the withdrawal allowlist, or dual control unsatisfied (§12.3). Never raised for order fields. |
 | `IDEMPOTENCY_CONFLICT`    | 409  | Same idempotency key, different body.                                                                                              |
 
 
@@ -667,23 +599,19 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `
 | Method | Path               | Purpose                                                                        |
 | ------ | ------------------ | ------------------------------------------------------------------------------ |
 | `GET`  | `/v1/health`       | Liveness + vault health. Public (no key), per prediction-gateway convention.   |
-| `POST` | `/v1/vault/init`   | First-run: establish the master (internal or external) per config. Idempotent. |
-| `GET`  | `/v1/vault/status` | `{ mode, initialized, master: { address, location, signable, custodian? } }`.  |
+| `POST` | `/v1/vault/init`   | First-run: establish the Turnkey sub-organisation and its HD wallet. Idempotent. |
+| `GET`  | `/v1/vault/status` | `{ mode, initialized, subOrgName? }`.                                          |
 
 
 There is no export endpoint in phase 1: Turnkey holds the key material, so the `dpmw` has nothing to export. Backup of key material is a Turnkey concern.
 
-`POST /v1/vault/init` response (internal master):
+`POST /v1/vault/init` response:
 
 ```json
-{ "mode": "turnkey", "master": { "address": "0x…", "location": "internal", "index": 0, "signable": true } }
+{ "mode": "turnkey", "initialized": true, "subOrgName": "dpm-builder-42-acme-9f2c1ab4e0d7" }
 ```
 
-`POST /v1/vault/init` response (external master):
-
-```json
-{ "mode": "turnkey", "master": { "address": "0x…", "location": "external", "custodian": "fireblocks", "signable": false } }
-```
+No address is derived here. The HD wallet arrives empty and every account is minted on demand by `POST /v1/addresses`.
 
 
 
@@ -706,10 +634,10 @@ There is no export endpoint in phase 1: Turnkey holds the key material, so the `
 Response:
 
 ```json
-{ "ref": "customer-12345", "index": 1, "address": "0x<eoa>", "proxyAddress": "0x<proxy>" }
+{ "ref": "customer-12345", "index": 0, "address": "0x<eoa>", "proxyAddress": "0x<proxy>" }
 ```
 
-There is **no** `role` **field**. Every address this endpoint creates is a user wallet, allocated at the next free index. An operator who needs a wallet for Plaee's shared balance (the "operational wallet") creates it here like any other, under a `ref` of its choosing — the `dpmw` treats it identically. The master is created only via `/v1/vault/init`.
+Every address is created here, at the next free index, and they are all the same kind of thing. An operator who needs a wallet for Plaee's shared balance (the "operational wallet"), or one to fund the others from, creates it through this call like any other, under a `ref` of its choosing — the `dpmw` treats it identically.
 
 ### 10.4 Order signing
 
@@ -772,18 +700,7 @@ Common request shape:
 
 (`conditionId` for redeem/split/merge; `recipient` + `amountDecimal` for withdraw; allowance needs only `ref`.) Every response is a complete `SubmitTransactionRequest` (see [Section 9.4](#94-meta-transaction--worked-example-allowance)). The operator supplies `recipient` and `amountDecimal`; the `dpmw` signs them without checking the destination or whether the proxy holds the amount. Each of these endpoints requires the wallet's EOA to be DPM-registered; otherwise `CUSTOMER_NOT_REGISTERED`.
 
-### 10.6 Treasury
-
-
-| Method | Path                             | Purpose                                                              |
-| ------ | -------------------------------- | -------------------------------------------------------------------- |
-| `POST` | `/v1/treasury/rebalance`         | Sign a transfer between the master and a user wallet; return tx hex. |
-| `POST` | `/v1/treasury/external-withdraw` | Sign a master→external transfer; dual-control gated.                 |
-
-
-`/v1/treasury/rebalance` takes the funding side as a wallet `ref` (or `master`) and the destination as an address; the operator chooses both. When the master is externally custodied (§6.6), the master-signed leg of either endpoint returns `MASTER_NOT_SIGNABLE`; the operator performs it through their custodian. Legs signed from a user wallet (e.g. a sweep back to the master) remain signable.
-
-### 10.7 Audit
+### 10.6 Audit
 
 
 | Method | Path        | Purpose                                                       |
@@ -830,19 +747,13 @@ This is a hard precondition on every meta-transaction endpoint, surfaced as the 
 
 
 
-### 12.3 Treasury policy
+### 12.3 What is not policed
 
-The `dpmw` enforces exactly **one** policy rule, and it is not a balance check:
+The `dpmw` enforces no movement policy at all. It does **not** validate order `maker`/`recipient`, does **not** restrict where a wallet's funds may move, and does **not** check that any address holds what is being signed for. Those are business rules that depend on ledger state and shared balance, and they belong in the operator gateway — the `dpmw` has neither the context nor a balance view to enforce them.
 
-- **Master → external** transfers are allowed only via `POST /v1/treasury/external-withdraw`, never through a proxy/relayer path, and only to a destination on the configured `DPMW_EXTERNAL_ALLOWLIST`. A destination outside the allowlist returns `POLICY_VIOLATION`.
+Authorisation stops at the API key: a caller that holds it may ask for any signature the service offers, for any `ref` in the directory.
 
-Nothing else is policed. In particular the `dpmw` does **not** validate order `maker`/`recipient`, does **not** restrict where user-wallet funds may move, and does **not** check that any address holds what is being signed for. Those are business rules that depend on ledger state and shared balance, and they belong in the operator gateway — the `dpmw` has neither the context nor a balance view to enforce them.
-
-### 12.4 Dual control for external withdrawals
-
-`POST /v1/treasury/external-withdraw` requires two distinct approver tokens (`DPMW_APPROVER_KEYS`, a set) presented in the request. A single key is insufficient. This is deliberately simple in v1 (shared approver keys); a later phase can move to per-approver signatures.
-
-### 12.5 Log redaction
+### 12.4 Log redaction
 
 Structured logs (one JSON object per line, matching the prediction-gateway convention) redact: Turnkey API credentials, API keys (inbound `DPMW_API_KEY` and outbound builder key alike), HMAC secrets, and full signatures (logged as a truncated prefix). Addresses, indices, refs, and non-secret request metadata are logged in full for support.
 
@@ -880,9 +791,6 @@ Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a
 | `mode`             | TEXT       | `turnkey` (the only value in phase 1).    |
 | `initialized`      | INTEGER    | 0/1.                                      |
 | `turnkey_org_id`   | TEXT       | Turnkey organisation / sub-org id.        |
-| `master_location`  | TEXT       | `internal` | `external`.                  |
-| `master_address`   | TEXT       | Recorded master address (both locations). |
-| `master_custodian` | TEXT       | Custody label when external (nullable).   |
 | `created_at`       | TEXT       | RFC3339.                                  |
 
 
@@ -895,7 +803,6 @@ A later mnemonic vault ([Section 13](#13-deferred-capabilities)) adds `keystore_
 | -------------------- | -------------- | ------------------------------------------------------- |
 | `id`                 | INTEGER PK     |                                                         |
 | `ref`                | TEXT UNIQUE    | Operator-supplied wallet reference.                     |
-| `role`               | TEXT           | `master` | `user` — no other roles exist.               |
 | `derivation_index`   | INTEGER UNIQUE | BIP-44 index.                                           |
 | `eoa_address`        | TEXT UNIQUE    | Lowercased hex.                                         |
 | `proxy_address`      | TEXT           | Lowercased hex; derived.                                |
@@ -1012,7 +919,6 @@ dpm-wallet/
 │   ├── addresses/               # controller + service + dto
 │   ├── sign/                    # order + cancel
 │   ├── meta-tx/
-│   ├── treasury/                # controller + service + policy + dto
 │   ├── audit/
 │   ├── health/
 │   ├── vault/
@@ -1093,9 +999,6 @@ All configuration is via environment variables, parsed and validated at boot (mi
 | ------------------------- | ------------- | ------------------- | --------------------------------------------------------------------------------------- |
 | `PORT`                    | no            | `8090`              | HTTP listen port.                                                                       |
 | `DPMW_VAULT_MODE`         | no            | `turnkey`           | `turnkey` is the only accepted value in phase 1.                                        |
-| `DPMW_MASTER_LOCATION`    | no            | `internal`          | `internal` (vault holds the master key) or `external` (third-party custody). See §6.6.  |
-| `DPMW_MASTER_ADDRESS`     | external only | —                   | Master wallet address when `DPMW_MASTER_LOCATION=external`.                             |
-| `DPMW_MASTER_CUSTODIAN`   | no            | —                   | Optional custody label for an external master (e.g. `fireblocks`, `qredo`, `metamask`). |
 | `DPMW_API_KEY`            | yes           | —                   | Inbound `X-API-Key` expected from the operator gateway.                                 |
 | `TURNKEY_API_PUBLIC_KEY`  | yes           | —                   | Turnkey API public key.                                                                 |
 | `TURNKEY_API_PRIVATE_KEY` | yes           | —                   | Turnkey API private key.                                                                |
@@ -1110,8 +1013,6 @@ All configuration is via environment variables, parsed and validated at boot (mi
 | `CONTRACT_PROXY_FACTORY`  | yes           | —                   | ProxyWalletFactory address.                                                             |
 | `CONTRACT_PROXY_IMPL`     | yes           | —                   | Proxy implementation (for CREATE2 derivation).                                          |
 | `CONTRACT_RELAY_HUB`      | yes           | —                   | RelayHub address.                                                                       |
-| `DPMW_EXTERNAL_ALLOWLIST` | no            | —                   | Comma-separated external withdrawal destinations (§12.3).                               |
-| `DPMW_APPROVER_KEYS`      | no            | —                   | Comma-separated approver tokens for dual control.                                       |
 | `DATABASE_PATH`           | no            | `/data/dpmw.sqlite` | SQLite file on the mounted volume.                                                      |
 | `LOG_LEVEL`               | no            | `info`              | `debug` | `info` | `warn` | `error`.                                                    |
 
@@ -1199,9 +1100,9 @@ volumes:
 
 ### 17.4 First-run
 
-1. Operator sets env (Turnkey credentials, contract addresses, and the master location — `internal`, or `external` with `DPMW_MASTER_ADDRESS`).
+1. Operator sets env (Turnkey credentials and contract addresses).
 2. The container starts: its command applies the schema, then the service boots and passes the EIP-712 self-check.
-3. Operator calls `POST /v1/vault/init` → an internal master (index 0) is created in Turnkey; an external master is recorded as non-signable (no key created).
+3. Operator calls `POST /v1/vault/init` → a Turnkey sub-organisation and an empty HD wallet are created. No address yet.
 4. Wallet onboarding proceeds per [Section 11](#11-onboarding-sequence). If the operator needs a wallet to back Plaee's shared balance, it is created through the same `POST /v1/addresses` call as any other — there is no separate step and no reserved index.
 
 
@@ -1224,7 +1125,6 @@ export async function bootstrap(config: Config): Promise<Runtime> {
 
   const vault = await rehydrateVault(state, config);  // re-authenticate against Turnkey
   await assertVaultMatchesDirectory(vault, db);       // re-read accounts and compare addresses
-  await assertMasterMatchesConfig(state, config);     // location/address drift check
   await assertExchangeDomain(config);                 // existing EIP-712 self-check
 
   const nextIndex = await walletRepo.maxDerivationIndex(db) + 1;
@@ -1239,18 +1139,17 @@ What each step recovers:
 | Step                      | Recovered from                     | Notes                                                                                                                                     |
 | ------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | **Migrations**            | `src/db/migrations/`               | Idempotent; brings an older volume up to the current schema after an image upgrade. Applied by an explicit deploy step, never at boot.    |
-| **Vault state**           | `vault_state` (single row)         | Mode, Turnkey org id, master location, master address, custodian label.                                                                   |
+| **Vault state**           | `vault_state` (single row)         | Mode and Turnkey org id.                                                                                                                  |
 | **Signing keys**          | Nothing — they never left Turnkey  | The container re-reads `turnkey_org_id` and re-authenticates with the env credentials. There is no key material on the volume to recover. |
-| **Address directory**     | `wallets`                          | Refs, roles, derivation indices, EOA and proxy addresses, Turnkey account ids, `dpm_registered` flags.                                    |
+| **Address directory**     | `wallets`                          | Refs, derivation indices, EOA and proxy addresses, Turnkey account ids, `dpm_registered` flags.                                           |
 | **Next derivation index** | `MAX(derivation_index) + 1`        | Read from the database, never from memory or config, so a restart can never reissue an index and collide with an existing address.        |
 | **Idempotency window**    | `idempotency_keys`                 | Survives restart, so a client retrying across a restart still gets the original response instead of a second signature.                   |
 | **Audit history**         | `audit_events`, `signing_requests` | Continuous across restarts; the log is append-only.                                                                                       |
 
 
-Three of these steps are **fail-fast consistency checks** rather than loads, and the container refuses to become ready if any fails:
+Two of these steps are **fail-fast consistency checks** rather than loads, and the container refuses to become ready if either fails:
 
 - `assertVaultMatchesDirectory` re-reads the stored wallets' accounts from Turnkey and compares the returned addresses against `wallets.eoa_address`. A mismatch means the volume and the Turnkey organisation have diverged — a database restored from a different install, or the container pointed at a different `TURNKEY_ORGANIZATION_ID`. Continuing would silently mint a second, unrelated address tree for existing refs, so this aborts startup with `VAULT_DB_MISMATCH` and exits non-zero (a boot failure, not an HTTP error — the server never binds).
-- `assertMasterMatchesConfig` compares `vault_state.master_location` / `master_address` with `DPMW_MASTER_LOCATION` / `DPMW_MASTER_ADDRESS`. This catches an operator flipping custody mode against a volume that was initialised the other way.
 - Wrong or revoked Turnkey credentials fail earlier and unambiguously: re-authentication fails in `rehydrateVault`, so the container never reaches the address checks.
 
 Readiness (§17.3) only reports ready after `bootstrap` completes, so an orchestrator will not route traffic to a container whose vault could not be rehydrated.
@@ -1276,6 +1175,5 @@ Restore is the reverse: stop the container, place the file at `DATABASE_PATH` on
 - Pin `GET /relay-payload` authentication with a contract test: the deployed `relayer-api` must accept a bare `X-Builder-Api-Key` on that route, with no app `X-API-Key` present. The global API-key gate in front of the route group has to admit builder keys for this to hold.
 - Confirm the exact `SubmitTransactionRequest` field set accepted by the deployed `relayer-api` matches the SDK's `SubmitTransactionRequest` type (they align today; pin it with a contract test).
 - Decide whether `EXCHANGE_DOMAIN_NAME` becomes an SDK parameter (preferred) or stays a `dpmw`-side override until the SDK change lands.
-- Decide dual-control model beyond v1 (shared approver tokens → per-approver signatures).
-- Decide whether an **external master** should later become signable through the `SignerProvider` seam (e.g. a Fireblocks provider that assembles and signs master treasury transactions), versus remaining fully operator-driven. v1 treats it as address-only / non-signable.
+- Decide whether externally custodied addresses should later be representable through the `SignerProvider` seam (e.g. a Fireblocks provider that assembles and signs on their behalf). v1 supports vault-managed addresses only.
 
