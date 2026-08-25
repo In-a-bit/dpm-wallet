@@ -209,8 +209,12 @@ a different key tree and orphan every address already issued.
 
 ### Cold start
 
-All state lives in one SQLite file on a mounted volume: the sub-organization credentials, the vault
-handle, the address directory, the audit trail, and idempotency records. On boot the service
+Nearly all state lives in one SQLite file on a mounted volume: the sub-organization credentials, the
+vault handle, the address directory, the audit trail, and idempotency records. The one thing beside
+it is `api-key-pair.plaintext.json`, an unencrypted copy of the API key pair written next to the
+database the moment it is confirmed to be the pair `vault_state` holds — it lands in the same
+directory precisely so it shares that directory's mount and survives a restart like everything else
+on it. On boot the service
 decrypts its Turnkey credentials, reloads the vault handle, and reconciles the directory against
 the custody backend in both directions:
 

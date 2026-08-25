@@ -16,6 +16,7 @@ import { AuditLog } from "../observability/audit";
 import { logInfo, logWarn } from "../observability/log";
 import { CONFIG, DPM_API, ENCRYPTION_KEY, SIGNER_PROVIDER, TRANSACTION } from "../tokens";
 import type { Transaction } from "../tokens";
+import { writeApiKeyPairBackup } from "./api-key-pair-plaintext-backup";
 import type { ProviderCredentials, SignerProvider } from "./providers/signer-provider.interface";
 import { TurnkeyKeyVault } from "./turnkey-vault";
 
@@ -170,9 +171,13 @@ export class VaultService {
       },
       new Date().toISOString(),
     );
-    // A concurrent init may have won the insert, in which case its key pair is the one on the
-    // volume and the one dpm-api will recognise; the pair generated here is discarded.
+    // A concurrent init may have won the insert, in which case its key pair is the one on
+    // the volume and the one dpm-api will recognise; the pair generated here is discarded.
     const won = reserved.subOrgApiPublicKey === generated.publicKeyHex;
+    // Written in the clear only once the encrypted copy is confirmed on the volume, and only
+    // for the pair that actually won — writing the loser's pair would leave a plaintext copy
+    // of key material the database never ended up holding.
+    if (won) writeApiKeyPairBackup(this.config, generated);
     logInfo(won ? "vault.api_key_pair_reserved" : "vault.api_key_pair_resumed", {
       apiPublicKey: reserved.subOrgApiPublicKey,
     });

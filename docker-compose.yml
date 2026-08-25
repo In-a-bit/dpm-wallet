@@ -5,8 +5,10 @@ services:
     ports: ["8090:8090"]
     env_file: .env
     # Mount the directory, not the file: WAL mode writes dpm-wallet.sqlite-wal and -shm beside
-    # the database, and SQLite recovery may recreate them. Keep the volume on local disk —
-    # SQLite's POSIX advisory locking is unreliable over NFS/SMB and can silently corrupt the file.
+    # the database, and SQLite recovery may recreate them. The plaintext api-key-pair.plaintext.json
+    # backup (see src/vault/api-key-pair-plaintext-backup.ts) lands here too, for the same reason.
+    # Keep the volume on local disk — SQLite's POSIX advisory locking is unreliable over
+    # NFS/SMB and can silently corrupt the file.
     volumes: ["dpm-wallet-data:/data"]
     restart: unless-stopped
     # Let in-flight signing finish and the WAL checkpoint run.
