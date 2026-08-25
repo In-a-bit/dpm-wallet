@@ -2,8 +2,5 @@ node_modules/
 dist/
 .env
 *.log
-*.sqlite
-*.sqlite-wal
-*.sqlite-shm
 data/
 api-key-pair.plaintext.json

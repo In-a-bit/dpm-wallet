@@ -19,9 +19,9 @@ export class SignController {
 
   @Post("order")
   @HttpCode(HttpStatus.OK)
-  signOrder(@Body() body: SignOrderDto): Promise<SignedOrder> {
+  async signOrder(@Body() body: SignOrderDto): Promise<SignedOrder> {
     const { ref, maker, recipient, ...request } = body;
-    return this.orders.signOrder(this.addresses.get(ref), {
+    return this.orders.signOrder(await this.addresses.get(ref), {
       ...request,
       maker: maker as Address,
       ...(recipient === undefined ? {} : { recipient: recipient as Address }),
@@ -30,7 +30,11 @@ export class SignController {
 
   @Post("cancel")
   @HttpCode(HttpStatus.OK)
-  signCancel(@Body() body: SignCancelDto): Promise<SignedCancel> {
-    return this.orders.signCancel(this.addresses.get(body.ref), body.orderHash, body.marketId);
+  async signCancel(@Body() body: SignCancelDto): Promise<SignedCancel> {
+    return this.orders.signCancel(
+      await this.addresses.get(body.ref),
+      body.orderHash,
+      body.marketId,
+    );
   }
 }

@@ -16,15 +16,18 @@ const REPOSITORIES = [
 ];
 
 /**
- * Opens the volume before anything that reads it is constructed. Global because the
+ * Opens the connection pool before anything that reads it is constructed. Global because the
  * repositories it exports are needed across every feature.
  */
 @Global()
 @Module({
   providers: [
     {
+      // No explicit `await` here, but Nest's injector awaits whatever a `useFactory` returns
+      // before treating the provider as resolved — so nothing that injects a repository is
+      // constructed before the data source has connected and built its entity metadata.
       provide: DB,
-      useFactory: (config: Config) => openDatabase(config.databasePath),
+      useFactory: (config: Config) => openDatabase(config.databaseUrl),
       inject: [CONFIG],
     },
     {
@@ -32,7 +35,7 @@ const REPOSITORIES = [
       useFactory:
         (db: Db): Transaction =>
         (work) =>
-          db.$client.transaction(work)(),
+          db.transaction(work),
       inject: [DB],
     },
     ...REPOSITORIES,
@@ -42,12 +45,8 @@ const REPOSITORIES = [
 export class DatabaseModule implements OnApplicationShutdown {
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  /**
-   * Runs a final WAL checkpoint, folding the -wal contents back into the main file. Not
-   * required for correctness — SQLite replays the WAL on the next open — but it leaves the
-   * volume holding one self-contained file.
-   */
-  onApplicationShutdown(): void {
-    closeDatabase(this.db);
+  /** Drains the pool, so a shutdown does not leave connections open on the server. */
+  async onApplicationShutdown(): Promise<void> {
+    await closeDatabase(this.db);
   }
 }

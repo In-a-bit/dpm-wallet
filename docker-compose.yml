@@ -1,21 +1,46 @@
 services:
+  postgres:
+    image: postgres:18-alpine
+    # Fallback defaults match `.env.example`, so a recreate without the .env loaded still
+    # binds the public port at 5440 and uses the canonical creds. An existing .env overrides.
+    environment:
+      POSTGRES_USER: ${POSTGRESQL_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRESQL_DB:-dpm_wallet}
+    ports:
+      - "${POSTGRESQL_PORT:-5440}:5432"
+    volumes:
+      # Mounted at /var/lib/postgresql, not the /var/lib/postgresql/data of older images: 18+
+      # stores data in a major-version subdirectory of it, and refuses to start when it finds
+      # a volume mounted over the inner path instead.
+      - postgres-data:/var/lib/postgresql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER:-postgres} -d ${POSTGRESQL_DB:-dpm_wallet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   # Migrations run from the image's CMD, before the service starts — see the Dockerfile.
   dpm-wallet:
     build: .
     ports: ["8090:8090"]
     env_file: .env
-    # Mount the directory, not the file: WAL mode writes dpm-wallet.sqlite-wal and -shm beside
-    # the database, and SQLite recovery may recreate them. The plaintext api-key-pair.plaintext.json
-    # backup (see src/vault/api-key-pair-plaintext-backup.ts) lands here too, for the same reason.
-    # Keep the volume on local disk — SQLite's POSIX advisory locking is unreliable over
-    # NFS/SMB and can silently corrupt the file.
+    # Reached over the compose network rather than through the published port, so the host
+    # mapping above is only for psql and the TypeORM CLI from a workstation.
+    environment:
+      DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:-postgres}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
+    # The one file left on the volume: the plaintext api-key-pair.plaintext.json backup
+    # (see src/vault/api-key-pair-plaintext-backup.ts). Every table lives in Postgres.
     volumes: ["dpm-wallet-data:/data"]
+    depends_on:
+      postgres:
+        # Migrating is the container's first act, so it has to wait for a database that
+        # accepts connections rather than one that has merely been created.
+        condition: service_healthy
     restart: unless-stopped
-    # Let in-flight signing finish and the WAL checkpoint run.
+    # Let in-flight signing finish.
     stop_grace_period: 30s
-    # SQLite permits one writer per database file — never scale this beyond a single replica.
-    deploy:
-      replicas: 1
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8090/v1/health"]
       interval: 30s
@@ -23,5 +48,6 @@ services:
       retries: 3
 
 volumes:
-  # Survives `down`; destroyed only by `down -v`.
+  # Survive `down`; destroyed only by `down -v`.
+  dpm-wallet-postgres-data:
   dpm-wallet-data:

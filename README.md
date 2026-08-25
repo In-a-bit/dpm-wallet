@@ -23,6 +23,8 @@ See `docs/TECHNICAL-SPEC.md` for the full design. Deviations from it are listed 
 ```bash
 npm install
 cp .env.example .env
+docker compose up -d postgres   # the database; nothing runs without it
+npm run db:migrate              # apply the schema
 npm run dev
 ```
 
@@ -85,7 +87,7 @@ distinct situations.
 ### Addresses
 
 A wallet is identified by an operator-chosen `ref`, which maps to a BIP-44 derivation index
-starting at 0. The index is allocated from `MAX(derivation_index)` in SQLite rather than from
+starting at 0. The index is allocated from `MAX(derivation_index)` in the database rather than from
 memory, so a restart can never reissue one and hand two customers the same address.
 
 There is no role. Every wallet has the same capabilities, and an operator wallet backing a shared
@@ -197,24 +199,23 @@ Turnkey — one `dpm-api` request is the whole flow.
 `POST /v1/vault/init` is idempotent by short-circuit rather than by upsert — once the state row
 says initialised it returns what is already there and writes nothing, so re-running it cannot
 append a second audit event. On a first run it writes in two phases: the key pair first, then
-everything `dpm-api` reported, in one SQLite transaction. That order is what makes a crash
+everything `dpm-api` reported, in one Postgres transaction. That order is what makes a crash
 recoverable. `dpm-api` recognises a retry by the public key it receives, so an attempt that died
 after the first phase resumes with the *same* key pair and is handed the sub-organization it
 already owns; a freshly generated pair would be refused as a second sub-organization for the same
 owner and the install could never initialise.
 
-The `vault_state` row makes exactly one transition, guarded on `initialized = 0`. It identifies
-which sub-organization the volume belongs to; overwriting it would silently repoint an install at
+The `vault_state` row makes exactly one transition, guarded on `initialized = false`. It identifies
+which sub-organization the database belongs to; overwriting it would silently repoint an install at
 a different key tree and orphan every address already issued.
 
 ### Cold start
 
-Nearly all state lives in one SQLite file on a mounted volume: the sub-organization credentials, the
-vault handle, the address directory, the audit trail, and idempotency records. The one thing beside
-it is `api-key-pair.plaintext.json`, an unencrypted copy of the API key pair written next to the
-database the moment it is confirmed to be the pair `vault_state` holds — it lands in the same
-directory precisely so it shares that directory's mount and survives a restart like everything else
-on it. On boot the service
+Nearly all state lives in Postgres: the sub-organization credentials, the vault handle, the address
+directory, the audit trail, and idempotency records. The one thing outside it is
+`api-key-pair.plaintext.json`, an unencrypted copy of the API key pair written to `DATA_DIR` the
+moment it is confirmed to be the pair `vault_state` holds — the mounted volume exists for that file
+alone, so it survives a restart like everything in the database does. On boot the service
 decrypts its Turnkey credentials, reloads the vault handle, and reconciles the directory against
 the custody backend in both directions:
 
@@ -225,13 +226,11 @@ the custody backend in both directions:
   since account creation is idempotent per derivation path. Failing the boot on it would let one
   badly-timed crash brick the service permanently.
 
-Mount the **directory**, not the file: SQLite's WAL mode writes `-wal` and `-shm` siblings.
+Migrations are tracked, not replayed. TypeORM records each applied migration in the `migrations`
+table and runs only what is missing, so running it against an existing database applies just the
+new classes. Each one is reversible — `npm run db:revert` steps the last migration back down.
 
-Migrations are tracked, not replayed. Drizzle records each applied migration's hash in
-`__drizzle_migrations` and applies only what is missing, so running it against an existing volume
-applies just the new files.
-
-**Migrating is a step of its own, not something the service does to the volume on its own
+**Migrating is a step of its own, not something the service does to the database on its own
 initiative.** Where that step lives depends on how you start it:
 
 - **Container.** The image's `CMD` migrates and then starts the service, so `docker compose up`
@@ -241,7 +240,7 @@ initiative.** Where that step lives depends on how you start it:
 - **`npm`.** Nothing migrates implicitly. Run `npm run db:migrate` yourself, then start the
   service.
 
-Either way, starting against an unmigrated volume refuses the boot and names the command to run,
+Either way, starting against an unmigrated database refuses the boot and names the command to run,
 rather than failing later on a customer's first request.
 
 ## Configuration
@@ -251,8 +250,10 @@ rather than failing later on a customer's first request.
 | Variable | Notes |
 |---|---|
 | `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key` |
-| `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept on the volume. Losing it loses access to the sub-organization |
-| `DATABASE_PATH` | Inside the mounted directory; defaults to `/data/dpm-wallet.sqlite` |
+| `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept in the database. Losing it loses access to the sub-organization |
+| `DATABASE_URL` | Postgres connection string. Required — there is no default, so an install cannot silently come up against the wrong database |
+| `DATA_DIR` | The mounted directory, holding only `api-key-pair.plaintext.json`; defaults to `/data` |
+| `POSTGRESQL_*` | Read by the compose `postgres` service only. The service itself uses `DATABASE_URL` |
 | `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only |
 | `RELAYER_BUILDER_API_KEY` | Sent as `X-Builder-Api-Private-Key`, paired with `X-Builder-Address` naming the wallet being acted for; the app-level `X-API-Key` is the DPM platform's own credential and is never sent from here. It also identifies a builder-owned install to `dpm-api` |
 | `DPM_LP_API_KEY` | Set instead on a liquidity-provider install, which has no builder secret |
@@ -264,26 +265,38 @@ rather than being handed any.
 
 ## Development
 
+Everything below needs the database running:
+
+```bash
+docker compose up -d postgres
+```
+
 ```bash
 npm test              # jest: unit specs and the end-to-end suite
 npm run test:e2e      # the end-to-end suite alone
 npm run typecheck
 npm run lint
-npm run db:generate     # write a new SQL migration after editing src/db/schema.ts
-npm run db:migrate      # apply whatever a database is missing (uses drizzle-kit)
-npm run db:migrate:dist # the same, from the build output — no drizzle-kit, so it also works
+npm run db:generate -- src/db/migrations/Name
+                        # diff the entities against the database and write the migration that
+                        # closes the gap; add it to src/db/migrations/index.ts to arm it
+npm run db:migrate      # apply whatever a database is missing (needs ts-node)
+npm run db:migrate:dist # the same, from the build output — no ts-node, so it also works
                         # inside the runtime image, where the dev dependencies are gone
-npm run db:check        # verify the migration folder is consistent
-npm run db:studio     # browse the database
+npm run db:revert       # step the most recently applied migration back down
+npm run db:check        # list migrations and show which are applied
 ```
 
-The three commands that touch a database read `DRIZZLE_DATABASE_PATH`, defaulting to
-`./data/dpm-wallet.sqlite`, because the container's `/data` path is not reachable from a
-workstation. Point it at a copy of a volume rather than a live one.
+The `db:*` commands read the same `DATABASE_URL` the service does, so you cannot migrate one
+database and start against another. Point it at a copy rather than a live one.
 
-Tests boot the real app over an ephemeral port against an in-memory database and a local signer
-that derives the same BIP-44 tree Turnkey would. Signatures are therefore real and recoverable, so
-tests assert what was actually signed rather than that a call was made.
+Tests boot the real app over an ephemeral port against a local signer that derives the same BIP-44
+tree Turnkey would. Signatures are therefore real and recoverable, so tests assert what was
+actually signed rather than that a call was made.
+
+Each boot creates a throwaway `dpmw_test_*` database and drops it on close, so test files cannot
+see each other's rows. They reach the server through `TEST_DATABASE_URL` (see `.env.example`),
+defaulting to the compose `postgres` service; a suite run with nothing listening fails naming the
+command above rather than passing vacuously.
 
 ## Deployment
 
@@ -291,14 +304,16 @@ tests assert what was actually signed rather than that a call was made.
 docker compose up --build
 ```
 
-The image is a multi-stage Alpine build running as a non-root user. `better-sqlite3` publishes
-prebuilt binaries for glibc only, so on Alpine's musl its native addon is always compiled from
-source; the build stage carries the toolchain, prunes dev dependencies in place, and hands the
-runtime stage a `node_modules` that already contains the compiled addon. The runtime image ships
-no compiler. Mount a volume at the parent directory of `DATABASE_PATH`.
+This brings up Postgres, waits for it to accept connections, then builds and starts the service —
+which migrates before it listens. The image is a multi-stage Alpine build running as a non-root
+user, with no native addons to compile and dev dependencies pruned before the runtime stage.
 
-`SIGTERM` stops accepting connections, lets in-flight requests finish, and checkpoints the
-database before exit.
+Postgres is the one stateful piece. The `/data` volume holds only `api-key-pair.plaintext.json`,
+and the app container itself is disposable — the single-writer constraint that used to cap this
+service at one replica was SQLite's, not Postgres's.
+
+`SIGTERM` stops accepting connections, lets in-flight requests finish, and drains the connection
+pool before exit.
 
 ## Spec deviations
 
@@ -333,5 +348,16 @@ the implementation, so each decision is recorded here instead; the wording it re
    environment variables, which means every install is handed a credential for an organisation it
    shares. Instead each install mints its own P-256 key pair on first initialization and `dpm-api`
    creates a Turnkey sub-organization governed by it, so a leaked credential reaches one install's
-   keys and no others. `DPM_WALLET_ENCRYPTION_KEY` replaces them, encrypting the private half on
-   the volume.
+   keys and no others. `DPM_WALLET_ENCRYPTION_KEY` replaces them, encrypting the private half in
+   the database.
+7. **Postgres, not embedded SQLite.** The spec specifies SQLite via `better-sqlite3` on a mounted
+   volume (§14), which caps the service at one replica, needs a native addon compiled against the
+   runtime, and rules out network storage because it depends on POSIX advisory locking. Postgres
+   removes all three: the app container becomes stateless apart from the plaintext key pair backup,
+   and `DATABASE_URL` replaces `DATABASE_PATH`. The schema is otherwise the same four tables — the
+   `0/1` integer flags became real booleans and the ISO-8601 `text` timestamps became `timestamptz`.
+8. **TypeORM, not Drizzle.** The spec names Drizzle for the typed migrations it generates (§15.1).
+   TypeORM generates them by diffing the entities against the live database and, unlike Drizzle,
+   emits a `down` for each, so a bad deploy is revertible rather than only rollable-forward. The
+   entities keep timestamps as ISO-8601 strings through a value transformer, so the column type
+   changed without the shape the services and responses see changing with it.

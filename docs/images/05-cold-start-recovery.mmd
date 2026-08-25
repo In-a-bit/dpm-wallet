@@ -1,7 +1,7 @@
 flowchart TB
   start([Container starts]) --> cfg[Load and validate env config]
-  cfg --> open[Open SQLite on /data volume, apply pragmas<br/>SQLite replays -wal if the previous run crashed]
-  open --> mig[Run Drizzle migrations]
+  cfg --> open[Open the Postgres pool from DATABASE_URL]
+  open --> mig[Assert the schema is present<br/>migrating is a separate deploy step]
   mig --> state{vault_state<br/>initialized?}
 
   state -->|no| waitInit[Serve /v1/health and<br/>/v1/vault/init only]

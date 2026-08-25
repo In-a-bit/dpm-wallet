@@ -11,11 +11,10 @@ const DRAIN_TIMEOUT_MS = 25_000;
 
 /**
  * Stops accepting connections, lets in-flight signing finish, then closes the app — which runs
- * the shutdown hooks, and with them the final WAL checkpoint that folds the -wal contents back
- * into the main database file.
+ * the shutdown hooks, and with them the drain of the database pool.
  *
- * Not required for correctness: signing holds no state across requests, and SQLite replays the
- * WAL on the next open. It just leaves the volume holding one self-contained file.
+ * Not required for correctness: signing holds no state across requests, and an unclosed pool is
+ * dropped by the server anyway. It just leaves no idle backend behind on the way out.
  *
  * Nest's own `enableShutdownHooks` is deliberately not used: it closes the server immediately
  * on a signal, with no drain window for a signature already in flight.

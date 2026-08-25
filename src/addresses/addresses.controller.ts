@@ -32,8 +32,8 @@ export class AddressesController {
   }
 
   @Get()
-  list(@Query() query: PaginationDto) {
-    const page = this.addresses.list(query.limit, query.offset);
+  async list(@Query() query: PaginationDto) {
+    const page = await this.addresses.list(query.limit, query.offset);
     return {
       addresses: page.wallets.map(toAddressResponse),
       total: page.total,
@@ -43,8 +43,8 @@ export class AddressesController {
   }
 
   @Get(":ref")
-  get(@Param("ref", RefPipe) ref: string): AddressResponseDto {
-    return toAddressResponse(this.addresses.get(ref));
+  async get(@Param("ref", RefPipe) ref: string): Promise<AddressResponseDto> {
+    return toAddressResponse(await this.addresses.get(ref));
   }
 
   /**
@@ -65,10 +65,10 @@ export class AddressesController {
    */
   @Post(":ref/dpm-registered")
   @HttpCode(HttpStatus.OK)
-  setDpmRegistered(
+  async setDpmRegistered(
     @Param("ref", RefPipe) ref: string,
     @Body() body: DpmRegisteredDto,
-  ): AddressResponseDto {
-    return toAddressResponse(this.addresses.setDpmRegistered(ref, body.registered));
+  ): Promise<AddressResponseDto> {
+    return toAddressResponse(await this.addresses.setDpmRegistered(ref, body.registered));
   }
 }

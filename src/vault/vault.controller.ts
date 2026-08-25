@@ -19,7 +19,7 @@ export class VaultController {
   }
 
   @Get("status")
-  status(): VaultStatus {
+  status(): Promise<VaultStatus> {
     return this.vault.status();
   }
 }

@@ -1,3 +1,5 @@
+import type { Executor } from "./db/client";
+
 /**
  * Injection tokens for the collaborators that are not classes: interfaces, type aliases and
  * functions. Anything with a class to name is injected by that class instead.
@@ -12,7 +14,8 @@ export const KEY_VAULT = "KEY_VAULT";
 
 /**
  * Runs several repository writes as one unit, so a multi-row operation cannot leave the
- * volume half-written. Synchronous by necessity: better-sqlite3 transactions cannot span
- * an await, so any provider call must complete before the transaction opens.
+ * database half-written. The executor handed to `work` is what makes that hold: every write
+ * meant to be part of the transaction must be issued through it, because a write sent to the
+ * pool instead runs on another connection and commits on its own.
  */
-export type Transaction = <T>(work: () => T) => T;
+export type Transaction = <T>(work: (executor: Executor) => Promise<T>) => Promise<T>;

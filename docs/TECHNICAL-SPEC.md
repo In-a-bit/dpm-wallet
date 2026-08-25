@@ -776,9 +776,9 @@ Everything else once considered for a later phase is now **out of scope permanen
 
 
 
-## 14. Data model (SQLite)
+## 14. Data model (Postgres)
 
-Embedded SQLite via **Drizzle ORM** with `better-sqlite3`, in **WAL** mode, on a persistent Docker volume. One database file, migrated by an explicit deploy step.
+**Postgres** via **TypeORM** over the `pg` connection pool. One database, migrated by an explicit deploy step.
 
 ### 14.1 Tables
 
@@ -855,7 +855,7 @@ Indices: `wallets_ref`, `wallets_eoa_lower`, `wallets_proxy_lower`, `wallets_ind
 
 ### 14.2 Migrations
 
-Drizzle migrations live in `src/db/migrations/` and are applied by a step separate from the service, never from within its boot logic. In the image that step is the container's `CMD`, which runs `dist/db/migrate-cli` and then hands the process to the service; outside it, the operator runs `npm run db:migrate`. Keeping it in the command rather than in application code leaves it visible in the logs and overridable — the service can be started without it, and the migration run without the service. Boot asserts the schema is present and fails with the command to run if it is not. WAL mode is set via `PRAGMA journal_mode=WAL` at connection open.
+TypeORM migrations live in `src/db/migrations/` as reversible classes, listed in that folder's `index.ts` rather than discovered by a glob, and are applied by a step separate from the service, never from within its boot logic. In the image that step is the container's `CMD`, which runs `dist/db/migrate-cli` and then hands the process to the service; outside it, the operator runs `npm run db:migrate`. Keeping it in the command rather than in application code leaves it visible in the logs and overridable — the service can be started without it, and the migration run without the service. Boot asserts the schema is present and fails with the command to run if it is not. `synchronize` is off in every environment, so the schema only ever changes by an applied migration.
 
 ### 14.3 Durability across container restarts
 
@@ -935,8 +935,9 @@ dpm-wallet/
 │   │   ├── builder-key-fetch.ts     # fetchImpl injecting X-Builder-Api-Key
 │   │   └── wiring.ts                # picks SDK build functions
 │   ├── db/
-│   │   ├── client.ts            # better-sqlite3 + drizzle, WAL
-│   │   ├── schema.ts
+│   │   ├── client.ts            # TypeORM DataSource over the pg pool
+│   │   ├── data-source.ts       # the same options, for the TypeORM CLI
+│   │   ├── entities/
 │   │   ├── repositories/
 │   │   └── migrations/
 │   ├── crypto/
@@ -954,7 +955,6 @@ dpm-wallet/
 ├── Dockerfile
 ├── docker-compose.yml
 ├── .env.example
-├── drizzle.config.ts
 ├── nest-cli.json
 ├── jest.config.js
 ├── tsconfig.json
@@ -975,7 +975,7 @@ dpm-wallet/
 | Validation      | class-validator + class-transformer         | Nest's own DTO pipeline, driven by the app-wide `ValidationPipe`.              |
 | API docs        | `@nestjs/swagger`                           | Served at `/v1/docs`, generated from the controllers and DTOs.                 |
 | Crypto/ABI      | viem v2                                     | Matches dpm-sdk; reused via the vendored SDK.                                  |
-| DB              | SQLite + `better-sqlite3` + Drizzle         | Embedded, single-file, in-project as required; Drizzle gives typed migrations. |
+| DB              | Postgres + `pg` + TypeORM                   | Matches the platform's other services; TypeORM gives reversible migrations generated from the entities. |
 | Tests           | Jest + supertest                            | Nest's default; `@nestjs/testing` boots the real module graph.                 |
 | Logging         | JSON to stdout                              | Matches prediction-gateway `log.ts`.                                           |
 

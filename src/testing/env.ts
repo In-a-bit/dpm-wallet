@@ -7,7 +7,9 @@ export const TEST_API_KEY = "test-api-key";
 const BASE_ENV: Record<string, string> = {
   // Keeps test output readable; a test that cares about a log line overrides this.
   LOG_LEVEL: "error",
-  DATABASE_PATH: ":memory:",
+  // `DATABASE_URL` is not here: the harness mints a throwaway database per boot.
+  // Gitignored, and keeps the plaintext key pair backup out of the repository root.
+  DATA_DIR: "./data",
   DPM_WALLET_API_KEY: TEST_API_KEY,
   DPM_WALLET_ENCRYPTION_KEY: "c8d3934504bc5bdff0e4233964d62bb28505ed139fd55f3ef27e9b8ef3efe751",
   DPM_API_BASE_URL: "https://dpm-api.test",

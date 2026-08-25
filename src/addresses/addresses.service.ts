@@ -41,13 +41,13 @@ export class AddressesService {
     return this.runExclusive(() => this.createNextWallet(ref));
   }
 
-  get(ref: string): Wallet {
-    const wallet = this.wallets.findByRef(ref);
+  async get(ref: string): Promise<Wallet> {
+    const wallet = await this.wallets.findByRef(ref);
     if (!wallet) throw addressNotFound(ref);
     return wallet;
   }
 
-  list(limit: number, offset: number): WalletPage {
+  list(limit: number, offset: number): Promise<WalletPage> {
     return this.wallets.list(limit, offset);
   }
 
@@ -57,9 +57,9 @@ export class AddressesService {
    * recovering the signer — which is the whole proof, since only this vault can produce it.
    */
   async signDpmAttestation(ref: string): Promise<DpmAttestation> {
-    const wallet = this.get(ref);
+    const wallet = await this.get(ref);
     const signature = await this.vault.personalSign(wallet.eoaAddress, LP_ATTESTATION_MESSAGE);
-    this.audit.record({
+    await this.audit.record({
       ref,
       action: AuditAction.AddressDpmAttestation,
       outcome: "success",
@@ -73,10 +73,10 @@ export class AddressesService {
    * signing depends on it: `GET /relay-payload` resolves the RelayHub nonce from the DPM
    * `users` table, so an unregistered EOA cannot yield one.
    */
-  setDpmRegistered(ref: string, registered: boolean): Wallet {
-    const wallet = this.wallets.markDpmRegistered(ref, registered);
+  async setDpmRegistered(ref: string, registered: boolean): Promise<Wallet> {
+    const wallet = await this.wallets.markDpmRegistered(ref, registered);
     if (!wallet) throw addressNotFound(ref);
-    this.audit.record({
+    await this.audit.record({
       ref,
       action: AuditAction.AddressDpmRegistered,
       outcome: "success",
@@ -86,11 +86,11 @@ export class AddressesService {
   }
 
   private async createNextWallet(ref: string): Promise<Wallet> {
-    if (this.wallets.findByRef(ref)) throw refAlreadyExists(ref);
+    if (await this.wallets.findByRef(ref)) throw refAlreadyExists(ref);
 
-    const index = this.nextIndex();
+    const index = await this.nextIndex();
     const account = await this.vault.createAccount(index, ref);
-    const wallet = this.wallets.insert({
+    const wallet = await this.wallets.insert({
       ref,
       derivationIndex: index,
       eoaAddress: account.address,
@@ -98,7 +98,7 @@ export class AddressesService {
       turnkeyAccountId: account.accountId,
       createdAt: new Date().toISOString(),
     });
-    this.audit.record({
+    await this.audit.record({
       ref,
       action: AuditAction.AddressCreate,
       outcome: "success",
@@ -112,17 +112,18 @@ export class AddressesService {
   }
 
   /** The first wallet an install issues takes index 0; the directory owns the whole tree. */
-  private nextIndex(): number {
-    return this.wallets.maxDerivationIndex() + 1;
+  private async nextIndex(): Promise<number> {
+    return (await this.wallets.maxDerivationIndex()) + 1;
   }
 
   /**
    * Runs `work` only after every previously queued call has settled, so two concurrent
    * creates cannot both read the same `MAX(derivation_index)` and race to insert the same
    * index. That gap is real rather than theoretical: the vault call sits between the read
-   * and the insert, so Node interleaves other requests in the middle of it. The spec allows
-   * exactly one writer against the SQLite volume (§14.3), which is what makes an in-process
-   * queue sufficient — with a second replica this would have to become a database lock.
+   * and the insert, so Node interleaves other requests in the middle of it. This serialises
+   * one process only; a second replica would need a database-level lock. The unique index on
+   * `derivation_index` is the backstop either way — it turns a lost race into a failed insert
+   * rather than two customers sharing an address.
    */
   private runExclusive<T>(work: () => Promise<T>): Promise<T> {
     const result = this.queueTail.then(work, work);

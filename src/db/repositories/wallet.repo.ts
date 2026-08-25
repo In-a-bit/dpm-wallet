@@ -1,10 +1,10 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { asc, eq, sql } from "drizzle-orm";
+import type { Repository } from "typeorm";
 import { getAddress, type Address } from "viem";
 
-import type { Db } from "../client";
 import { DB } from "../../tokens";
-import { wallets, type WalletRow } from "../schema";
+import type { Db } from "../client";
+import { WalletEntity } from "../entities";
 
 export type Wallet = {
   ref: string;
@@ -32,27 +32,29 @@ export type WalletPage = {
 
 @Injectable()
 export class WalletRepository {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  private readonly wallets: Repository<WalletEntity>;
 
-  findByRef(ref: string): Wallet | undefined {
-    const [row] = this.db.select().from(wallets).where(eq(wallets.ref, ref)).all();
+  constructor(@Inject(DB) db: Db) {
+    this.wallets = db.getRepository(WalletEntity);
+  }
+
+  async findByRef(ref: string): Promise<Wallet | undefined> {
+    const row = await this.wallets.findOneBy({ ref });
     return row ? toWallet(row) : undefined;
   }
 
-  list(limit: number, offset: number): WalletPage {
-    const rows = this.db
-      .select()
-      .from(wallets)
-      .orderBy(asc(wallets.derivationIndex))
-      .limit(limit)
-      .offset(offset)
-      .all();
-    return { wallets: rows.map(toWallet), total: this.count() };
+  async list(limit: number, offset: number): Promise<WalletPage> {
+    const [rows, total] = await this.wallets.findAndCount({
+      order: { derivationIndex: "ASC" },
+      take: limit,
+      skip: offset,
+    });
+    return { wallets: rows.map(toWallet), total };
   }
 
   /** Every EOA in the directory, for the boot-time reconciliation against the custody backend. */
-  allEoaAddresses(): Address[] {
-    const rows = this.db.select({ eoaAddress: wallets.eoaAddress }).from(wallets).all();
+  async allEoaAddresses(): Promise<Address[]> {
+    const rows = await this.wallets.find({ select: { eoaAddress: true } });
     return rows.map((row) => row.eoaAddress as Address);
   }
 
@@ -60,12 +62,8 @@ export class WalletRepository {
    * The highest index in use, or -1 when the directory is empty. Read from the database
    * rather than memory or config, so a restart can never reissue an index.
    */
-  maxDerivationIndex(): number {
-    const [row] = this.db
-      .select({ max: sql<number | null>`MAX(${wallets.derivationIndex})` })
-      .from(wallets)
-      .all();
-    return row?.max ?? -1;
+  async maxDerivationIndex(): Promise<number> {
+    return (await this.wallets.maximum("derivationIndex")) ?? -1;
   }
 
   /**
@@ -73,50 +71,35 @@ export class WalletRepository {
    * malformed or mis-checksummed address here, at the boundary, so every later read is a
    * plain string fetch of a value already known to be well-formed.
    */
-  insert(wallet: NewWallet): Wallet {
-    const [row] = this.db
-      .insert(wallets)
-      .values({
+  async insert(wallet: NewWallet): Promise<Wallet> {
+    const row = await this.wallets.save(
+      this.wallets.create({
         ref: wallet.ref,
         derivationIndex: wallet.derivationIndex,
         eoaAddress: getAddress(wallet.eoaAddress),
         proxyAddress: getAddress(wallet.proxyAddress),
         turnkeyAccountId: wallet.turnkeyAccountId,
-        dpmRegistered: 0,
+        dpmRegistered: false,
         createdAt: wallet.createdAt,
-      })
-      .returning()
-      .all();
-    return toWallet(row!);
+      }),
+    );
+    return toWallet(row);
   }
 
-  markDpmRegistered(ref: string, registered: boolean): Wallet | undefined {
-    const [row] = this.db
-      .update(wallets)
-      .set({ dpmRegistered: registered ? 1 : 0 })
-      .where(eq(wallets.ref, ref))
-      .returning()
-      .all();
-    return row ? toWallet(row) : undefined;
-  }
-
-  private count(): number {
-    const [row] = this.db
-      .select({ total: sql<number>`COUNT(*)` })
-      .from(wallets)
-      .all();
-    return row?.total ?? 0;
+  async markDpmRegistered(ref: string, registered: boolean): Promise<Wallet | undefined> {
+    const result = await this.wallets.update({ ref }, { dpmRegistered: registered });
+    return result.affected ? this.findByRef(ref) : undefined;
   }
 }
 
-function toWallet(row: WalletRow): Wallet {
+function toWallet(row: WalletEntity): Wallet {
   return {
     ref: row.ref,
     derivationIndex: row.derivationIndex,
     eoaAddress: row.eoaAddress as Address,
     proxyAddress: row.proxyAddress as Address,
-    turnkeyAccountId: row.turnkeyAccountId ?? null,
-    dpmRegistered: row.dpmRegistered === 1,
+    turnkeyAccountId: row.turnkeyAccountId,
+    dpmRegistered: row.dpmRegistered,
     createdAt: row.createdAt,
   };
 }

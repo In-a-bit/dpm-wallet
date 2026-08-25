@@ -61,7 +61,7 @@ export class OrderSignerService {
     const typedData = this.typedDataFor(order);
     const signature = await this.vault.signTypedData(wallet.eoaAddress, typedData);
     const orderHash = hashTypedData(typedData);
-    this.audit.record({
+    await this.audit.record({
       ref: wallet.ref,
       action: AuditAction.SignOrder,
       outcome: "success",
@@ -86,7 +86,7 @@ export class OrderSignerService {
   async signCancel(wallet: Wallet, orderHash: string, marketId: string): Promise<SignedCancel> {
     const message = formatCancelOrderMessage(orderHash, marketId);
     const signature = await this.vault.personalSign(wallet.eoaAddress, toHex(message));
-    this.audit.record({
+    await this.audit.record({
       ref: wallet.ref,
       action: AuditAction.SignCancel,
       outcome: "success",

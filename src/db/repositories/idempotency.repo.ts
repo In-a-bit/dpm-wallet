@@ -1,9 +1,9 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { eq, lt } from "drizzle-orm";
+import { LessThan, type Repository } from "typeorm";
 
-import type { Db } from "../client";
 import { DB } from "../../tokens";
-import { idempotencyKeys } from "../schema";
+import type { Db } from "../client";
+import { IdempotencyKeyEntity } from "../entities";
 
 export type IdempotencyRecord = {
   requestHash: string;
@@ -12,23 +12,33 @@ export type IdempotencyRecord = {
 
 @Injectable()
 export class IdempotencyRepository {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  private readonly keys: Repository<IdempotencyKeyEntity>;
 
-  find(key: string): IdempotencyRecord | undefined {
-    const [row] = this.db.select().from(idempotencyKeys).where(eq(idempotencyKeys.key, key)).all();
+  constructor(@Inject(DB) private readonly db: Db) {
+    this.keys = db.getRepository(IdempotencyKeyEntity);
+  }
+
+  async find(key: string): Promise<IdempotencyRecord | undefined> {
+    const row = await this.keys.findOneBy({ key });
     return row ? { requestHash: row.requestHash, responseJson: row.responseJson } : undefined;
   }
 
-  save(key: string, record: IdempotencyRecord, createdAt: string): void {
-    this.db
-      .insert(idempotencyKeys)
+  /**
+   * `orIgnore` rather than a check-then-insert: two concurrent requests carrying the same key
+   * would both pass the check, and the loser would fail the insert instead of being a no-op.
+   */
+  async save(key: string, record: IdempotencyRecord, createdAt: string): Promise<void> {
+    await this.db
+      .createQueryBuilder()
+      .insert()
+      .into(IdempotencyKeyEntity)
       .values({ key, ...record, createdAt })
-      .onConflictDoNothing({ target: idempotencyKeys.key })
-      .run();
+      .orIgnore()
+      .execute();
   }
 
-  purgeOlderThan(cutoff: string): number {
-    return this.db.delete(idempotencyKeys).where(lt(idempotencyKeys.createdAt, cutoff)).run()
-      .changes;
+  async purgeOlderThan(cutoff: string): Promise<number> {
+    const result = await this.keys.delete({ createdAt: LessThan(cutoff) });
+    return result.affected ?? 0;
   }
 }

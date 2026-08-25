@@ -26,7 +26,13 @@ export type ContractAddresses = {
 export type Config = {
   port: number;
   logLevel: LogLevel;
-  databasePath: string;
+  /** libpq connection string for the Postgres database holding every table. */
+  databaseUrl: string;
+  /**
+   * The mounted directory. Nothing but the plaintext API key pair backup lives here now that
+   * the database is a server rather than a file.
+   */
+  dataDir: string;
   vaultMode: VaultMode;
   /** Inbound X-API-Key expected from the operator gateway. */
   apiKey: string;
@@ -64,7 +70,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     port: parsePort(env.PORT),
     logLevel: parseEnum("LOG_LEVEL", env.LOG_LEVEL, LOG_LEVELS, "info"),
-    databasePath: optional(env.DATABASE_PATH) ?? "/data/dpm-wallet.sqlite",
+    databaseUrl: required("DATABASE_URL", env.DATABASE_URL),
+    dataDir: optional(env.DATA_DIR) ?? "/data",
     vaultMode: parseEnum(
       "DPM_WALLET_VAULT_MODE",
       env.DPM_WALLET_VAULT_MODE,

@@ -6,7 +6,6 @@ dist
 .git
 .github
 *.log
-*.sqlite*
 data
 docs
 README.md

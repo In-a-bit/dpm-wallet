@@ -1,9 +1,16 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, desc, eq, gte, lte, sql, type SQL } from "drizzle-orm";
+import {
+  Between,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  type FindOperator,
+  type FindOptionsWhere,
+  type Repository,
+} from "typeorm";
 
-import type { Db } from "../client";
 import { DB } from "../../tokens";
-import { auditEvents, type AuditEventRow } from "../schema";
+import type { Db, Executor } from "../client";
+import { AuditEventEntity } from "../entities";
 
 export type AuditOutcome = "success" | "failure";
 
@@ -40,58 +47,63 @@ export type AuditPage = {
 
 @Injectable()
 export class AuditRepository {
-  constructor(@Inject(DB) private readonly db: Db) {}
+  private readonly events: Repository<AuditEventEntity>;
 
-  record(event: NewAuditEvent): void {
-    this.db
-      .insert(auditEvents)
-      .values({
-        ref: event.ref ?? null,
-        action: event.action,
-        outcome: event.outcome,
-        detail: event.detail === undefined ? null : JSON.stringify(event.detail),
-        createdAt: event.createdAt,
-      })
-      .run();
+  constructor(@Inject(DB) private readonly db: Db) {
+    this.events = db.getRepository(AuditEventEntity);
   }
 
-  query(query: AuditQuery): AuditPage {
-    const filter = buildFilter(query);
-    const rows = this.db
-      .select()
-      .from(auditEvents)
-      .where(filter)
-      .orderBy(desc(auditEvents.id))
-      .limit(query.limit)
-      .offset(query.offset)
-      .all();
-    return { events: rows.map(toAuditEvent), total: this.countMatches(filter) };
+  async record(event: NewAuditEvent, executor: Executor = this.db.manager): Promise<void> {
+    await executor.insert(AuditEventEntity, {
+      ref: event.ref ?? null,
+      action: event.action,
+      outcome: event.outcome,
+      detail: event.detail === undefined ? null : JSON.stringify(event.detail),
+      createdAt: event.createdAt,
+    });
   }
 
-  private countMatches(filter: SQL | undefined): number {
-    const [row] = this.db
-      .select({ total: sql<number>`COUNT(*)` })
-      .from(auditEvents)
-      .where(filter)
-      .all();
-    return row?.total ?? 0;
+  async query(query: AuditQuery): Promise<AuditPage> {
+    const [rows, total] = await this.events.findAndCount({
+      where: buildWhere(query),
+      order: { id: "DESC" },
+      take: query.limit,
+      skip: query.offset,
+    });
+    return { events: rows.map(toAuditEvent), total };
   }
 }
 
-function buildFilter(query: AuditQuery): SQL | undefined {
-  const conditions = [
-    query.ref ? eq(auditEvents.ref, query.ref) : undefined,
-    query.action ? eq(auditEvents.action, query.action) : undefined,
-    query.from ? gte(auditEvents.createdAt, query.from) : undefined,
-    query.to ? lte(auditEvents.createdAt, query.to) : undefined,
-  ].filter((condition): condition is SQL => condition !== undefined);
-  return conditions.length > 0 ? and(...conditions) : undefined;
+/**
+ * Only the filters the caller actually supplied are set. An absent one has to be left off the
+ * object rather than passed as `undefined`, which TypeORM rejects — a guard against the far
+ * worse alternative of a typo silently widening a query to every row.
+ */
+function buildWhere(query: AuditQuery): FindOptionsWhere<AuditEventEntity> {
+  const where: FindOptionsWhere<AuditEventEntity> = {};
+  if (query.ref) where.ref = query.ref;
+  if (query.action) where.action = query.action;
+
+  const createdAt = buildCreatedAtRange(query.from, query.to);
+  if (createdAt) where.createdAt = createdAt;
+  return where;
 }
 
-function toAuditEvent(row: AuditEventRow): AuditEvent {
+/** Both bounds are inclusive, matching the half-open-free `from`/`to` the API documents. */
+function buildCreatedAtRange(
+  from: string | undefined,
+  to: string | undefined,
+): FindOperator<string> | undefined {
+  if (from && to) return Between(from, to);
+  if (from) return MoreThanOrEqual(from);
+  if (to) return LessThanOrEqual(to);
+  return undefined;
+}
+
+function toAuditEvent(row: AuditEventEntity): AuditEvent {
   return {
     id: row.id,
-    ref: row.ref ?? null,
+    ref: row.ref,
     action: row.action,
     outcome: row.outcome as AuditOutcome,
     detail: row.detail === null ? null : safeParse(row.detail),

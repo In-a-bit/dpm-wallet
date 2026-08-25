@@ -28,15 +28,15 @@ export class StartupService implements OnApplicationBootstrap {
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    assertSchemaPresent(this.db);
+    await assertSchemaPresent(this.db);
     assertExchangeDomain();
     await this.vault.rehydrate();
-    this.purgeExpiredIdempotencyKeys();
+    await this.purgeExpiredIdempotencyKeys();
   }
 
-  private purgeExpiredIdempotencyKeys(): void {
+  private async purgeExpiredIdempotencyKeys(): Promise<void> {
     const cutoff = new Date(Date.now() - IDEMPOTENCY_RETENTION_MS).toISOString();
-    const purged = this.idempotency.purgeOlderThan(cutoff);
+    const purged = await this.idempotency.purgeOlderThan(cutoff);
     if (purged > 0) logInfo("startup.idempotency_purged", { purged });
   }
 }

@@ -1,11 +1,10 @@
 import { Inject, Injectable } from "@nestjs/common";
-import { and, eq } from "drizzle-orm";
 
 import type { VaultMode } from "../../config";
 import { DpmwError } from "../../errors";
 import { DB } from "../../tokens";
-import type { Db } from "../client";
-import { VAULT_STATE_ID, vaultState, type VaultStateRow } from "../schema";
+import type { Db, Executor } from "../client";
+import { VAULT_STATE_ID, VaultStateEntity } from "../entities";
 
 /**
  * The row as it is read back. The key pair is always there — the row cannot be inserted
@@ -41,9 +40,8 @@ export type InitializedVaultState = {
 export class VaultStateRepository {
   constructor(@Inject(DB) private readonly db: Db) {}
 
-  load(): VaultStateRecord | undefined {
-    const [row] = this.db.select().from(vaultState).where(eq(vaultState.id, VAULT_STATE_ID)).all();
-    return row ? toRecord(row) : undefined;
+  load(): Promise<VaultStateRecord | undefined> {
+    return this.loadWith(this.db.manager);
   }
 
   /**
@@ -52,69 +50,83 @@ export class VaultStateRepository {
    * dpm-api for a second sub-organization and be refused, leaving the install unable to
    * initialise at all.
    *
-   * Returns the existing row when one is already reserved, which is what makes the resume
-   * a read rather than a second insert.
+   * `orIgnore` is what makes the resume a read rather than a second insert: a row already
+   * reserved stays untouched and is returned as it stands.
    */
-  reserve(credentials: ReservedCredentials, createdAt: string): VaultStateRecord {
-    const [row] = this.db
-      .insert(vaultState)
+  async reserve(credentials: ReservedCredentials, createdAt: string): Promise<VaultStateRecord> {
+    await this.db
+      .createQueryBuilder()
+      .insert()
+      .into(VaultStateEntity)
       .values({
         id: VAULT_STATE_ID,
         mode: credentials.mode,
-        initialized: 0,
+        initialized: false,
         subOrgApiPublicKey: credentials.subOrgApiPublicKey,
         subOrgApiPrivateKeyEncrypted: credentials.subOrgApiPrivateKeyEncrypted,
         createdAt,
       })
-      .onConflictDoNothing({ target: vaultState.id })
-      .returning()
-      .all();
-    if (row) return toRecord(row);
+      .orIgnore()
+      .execute();
 
-    const existing = this.load();
-    if (!existing) {
+    const reserved = await this.load();
+    if (!reserved) {
       throw new DpmwError("INTERNAL_ERROR", "Vault state could not be reserved");
     }
-    return existing;
+    return reserved;
   }
 
   /**
-   * Phase two: the one transition this row ever makes. Guarded on `initialized = 0` so a
+   * Phase two: the one transition this row ever makes. Guarded on `initialized = false` so a
    * second call cannot repoint an install at a different sub-organisation and orphan every
    * address already issued.
    */
-  complete(state: InitializedVaultState): VaultStateRecord {
-    const [row] = this.db
-      .update(vaultState)
-      .set({
-        initialized: 1,
+  async complete(
+    state: InitializedVaultState,
+    executor: Executor = this.db.manager,
+  ): Promise<VaultStateRecord> {
+    const result = await executor.update(
+      VaultStateEntity,
+      { id: VAULT_STATE_ID, initialized: false },
+      {
+        initialized: true,
         subOrgId: state.subOrgId,
         subOrgName: state.subOrgName,
         turnkeyWalletId: state.turnkeyWalletId,
-      })
-      .where(and(eq(vaultState.id, VAULT_STATE_ID), eq(vaultState.initialized, 0)))
-      .returning()
-      .all();
+      },
+    );
 
-    if (!row) {
+    if (!result.affected) {
       throw new DpmwError(
         "INTERNAL_ERROR",
         "Vault state is already initialized and immutable; refusing to overwrite it",
       );
     }
-    return toRecord(row);
+
+    // Read back through the same executor, so a caller inside a transaction sees the row it
+    // just wrote rather than the pre-transaction one another connection would still return.
+    const completed = await this.loadWith(executor);
+    if (!completed) {
+      throw new DpmwError("INTERNAL_ERROR", "Vault state disappeared while being initialized");
+    }
+    return completed;
+  }
+
+  private async loadWith(executor: Executor): Promise<VaultStateRecord | undefined> {
+    const row = await executor.findOneBy(VaultStateEntity, { id: VAULT_STATE_ID });
+    return row ? toRecord(row) : undefined;
   }
 }
 
-function toRecord(row: VaultStateRow): VaultStateRecord {
+function toRecord(row: VaultStateEntity): VaultStateRecord {
   return {
     mode: row.mode as VaultMode,
-    initialized: row.initialized === 1,
+    initialized: row.initialized,
     subOrgApiPublicKey: row.subOrgApiPublicKey,
     subOrgApiPrivateKeyEncrypted: row.subOrgApiPrivateKeyEncrypted,
-    subOrgId: row.subOrgId ?? null,
-    subOrgName: row.subOrgName ?? null,
-    turnkeyWalletId: row.turnkeyWalletId ?? null,
+    subOrgId: row.subOrgId,
+    subOrgName: row.subOrgName,
+    turnkeyWalletId: row.turnkeyWalletId,
     createdAt: row.createdAt,
   };
 }

@@ -3,7 +3,7 @@ flowchart TB
   svc[Service layer: AddressService, OrderSigner, MetaTxSigner]
   sdkw[SDK wiring: VaultWalletAdapter, buildX calls]
   vaultL[Vault layer: KeyVault port + Turnkey adapter]
-  data[Data layer: SQLite via Drizzle]
+  data[Data layer: Postgres via TypeORM]
   obs[Observability: structured logs, audit trail]
 
   http --> svc

@@ -14,7 +14,7 @@ describe("vault init", () => {
 
   it("mints a key pair, creates a sub-organisation and adopts its credentials", async () => {
     const response = await harness.post("/v1/vault/init");
-    const state = harness.vaultState.load();
+    const state = await harness.vaultState.load();
 
     expect(response.status).toBe(200);
     expect(harness.dpmApi.createdCount).toBe(1);
@@ -34,7 +34,7 @@ describe("vault init", () => {
     const directory = await harness.get("/v1/addresses");
 
     expect(directory.body.total).toBe(0);
-    expect(countRows(harness, "wallets")).toBe(0);
+    expect(await countRows(harness, "wallets")).toBe(0);
   });
 
   it("sends only the public key and the wallet name", async () => {
@@ -42,17 +42,17 @@ describe("vault init", () => {
 
     expect(harness.dpmApi.requests).toEqual([
       {
-        apiPublicKey: harness.vaultState.load()?.subOrgApiPublicKey,
+        apiPublicKey: (await harness.vaultState.load())?.subOrgApiPublicKey,
         walletName: "dpm-wallet",
       },
     ]);
   });
 
-  // The private key is the only secret on the volume, so it is stored encrypted and the
+  // The private key is the only secret this service stores, so it is stored encrypted and the
   // plaintext never reaches a column.
   it("stores the private key encrypted and the public key in the clear", async () => {
     await harness.post("/v1/vault/init");
-    const state = harness.vaultState.load();
+    const state = await harness.vaultState.load();
 
     expect(state?.subOrgApiPublicKey).toBe(harness.provider.adopted?.apiPublicKey);
     expect(state?.subOrgApiPrivateKeyEncrypted).toMatch(/^v1\./);
@@ -68,14 +68,14 @@ describe("vault init", () => {
     expect(second.status).toBe(200);
     expect(second.body.subOrgName).toBe(first.body.subOrgName);
     expect(harness.dpmApi.requests).toHaveLength(1);
-    expect(countRows(harness, "vault_state")).toBe(1);
-    expect(auditActions(harness)).toEqual([AuditAction.VaultInit]);
+    expect(await countRows(harness, "vault_state")).toBe(1);
+    expect(await auditActions(harness)).toEqual([AuditAction.VaultInit]);
   });
 
   it("resumes with the same key pair after dpm-api rejected the first attempt", async () => {
     harness.dpmApi.failWith = new Error("dpm-api is down");
     const failed = await harness.post("/v1/vault/init");
-    const reserved = harness.vaultState.load();
+    const reserved = await harness.vaultState.load();
 
     harness.dpmApi.failWith = undefined;
     const retried = await harness.post("/v1/vault/init");
@@ -85,7 +85,9 @@ describe("vault init", () => {
     expect(retried.status).toBe(200);
     // Same key pair, so dpm-api recognises the retry and hands back one sub-organisation
     // rather than stranding the first.
-    expect(harness.vaultState.load()?.subOrgApiPublicKey).toBe(reserved?.subOrgApiPublicKey);
+    expect((await harness.vaultState.load())?.subOrgApiPublicKey).toBe(
+      reserved?.subOrgApiPublicKey,
+    );
     expect(harness.dpmApi.createdCount).toBe(1);
   });
 });
@@ -95,7 +97,7 @@ describe("vault init", () => {
  * partial write is unrecoverable, because that row makes its transition exactly once: the
  * vault would read as initialised with no trail of how it got there, or claim an
  * initialisation the state row never recorded. These tests fail the second write and assert
- * the volume is left resumable — the reserved key pair survives, and nothing says the vault
+ * the database is left resumable — the reserved key pair survives, and nothing says the vault
  * is ready.
  */
 describe("vault init atomicity", () => {
@@ -115,9 +117,9 @@ describe("vault init atomicity", () => {
     const response = await harness.post("/v1/vault/init");
 
     expect(response.status).toBe(500);
-    expect(harness.vaultState.load()?.initialized).toBe(false);
-    expect(harness.vaultState.load()?.subOrgId).toBeNull();
-    expect(auditActions(harness)).not.toContain(AuditAction.VaultInit);
+    expect((await harness.vaultState.load())?.initialized).toBe(false);
+    expect((await harness.vaultState.load())?.subOrgId).toBeNull();
+    expect(await auditActions(harness)).not.toContain(AuditAction.VaultInit);
   });
 
   it("initialises cleanly once the obstruction is gone, with no duplicate rows", async () => {
@@ -128,8 +130,8 @@ describe("vault init atomicity", () => {
     const response = await harness.post("/v1/vault/init");
 
     expect(response.status).toBe(200);
-    expect(countRows(harness, "vault_state")).toBe(1);
-    expect(auditActions(harness)).toEqual([AuditAction.VaultInit]);
+    expect(await countRows(harness, "vault_state")).toBe(1);
+    expect(await auditActions(harness)).toEqual([AuditAction.VaultInit]);
   });
 
   it("adopts the sub-organisation the failed attempt already created", async () => {
@@ -146,28 +148,25 @@ describe("vault init atomicity", () => {
   });
 });
 
-/** Makes every audit write throw, and returns the undo. */
+/** Makes every audit write fail the way a database error would, and returns the undo. */
 function failAuditWrites(harness: Harness): () => void {
   const audit = harness.audit;
   const record = audit.record.bind(audit);
-  audit.record = () => {
-    throw new Error("disk full");
-  };
+  audit.record = () => Promise.reject(new Error("disk full"));
   return () => {
     audit.record = record;
   };
 }
 
-function countRows(harness: Harness, table: "vault_state" | "wallets"): number {
-  const row = harness.db.$client.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get() as {
-    total: number;
-  };
-  return row.total;
+async function countRows(harness: Harness, table: "vault_state" | "wallets"): Promise<number> {
+  // Cast because COUNT(*) is a bigint, which node-postgres hands back as a string.
+  const rows = await harness.db.query<{ total: number }[]>(
+    `SELECT COUNT(*)::int AS total FROM ${table}`,
+  );
+  return rows[0]!.total;
 }
 
-function auditActions(harness: Harness): string[] {
-  const rows = harness.db.$client.prepare("SELECT action FROM audit_events").all() as {
-    action: string;
-  }[];
+async function auditActions(harness: Harness): Promise<string[]> {
+  const rows = await harness.db.query<{ action: string }[]>("SELECT action FROM audit_events");
   return rows.map((row) => row.action);
 }

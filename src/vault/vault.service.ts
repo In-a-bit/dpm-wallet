@@ -68,10 +68,10 @@ export class VaultService {
    * this returns what is already there and writes nothing.
    */
   async initialize(): Promise<VaultStatus> {
-    const existing = this.vaultState.load();
+    const existing = await this.vaultState.load();
     if (existing?.initialized) return this.status();
 
-    const state = this.reserveApiKeyPair(existing);
+    const state = await this.reserveApiKeyPair(existing);
     const apiKeyPair = this.readApiKeyPair(state);
     const subOrg = await this.dpmApi.createSubOrganization({
       apiPublicKey: apiKeyPair.apiPublicKey,
@@ -87,18 +87,25 @@ export class VaultService {
 
     // One transaction over both writes, so the trail can never claim an initialisation the
     // state row does not record. That row makes its one transition here, and no later call
-    // can repair a half-written result.
-    this.transaction(() => {
-      this.vaultState.complete({
-        subOrgId: subOrg.subOrgId,
-        subOrgName: subOrg.subOrgName,
-        turnkeyWalletId: subOrg.walletId,
-      });
-      this.audit.record({
-        action: AuditAction.VaultInit,
-        outcome: "success",
-        detail: { subOrgId: subOrg.subOrgId, subOrgName: subOrg.subOrgName },
-      });
+    // can repair a half-written result. Both writes go through the transaction's executor:
+    // one issued against the pool would run on another connection and commit by itself.
+    await this.transaction(async (tx) => {
+      await this.vaultState.complete(
+        {
+          subOrgId: subOrg.subOrgId,
+          subOrgName: subOrg.subOrgName,
+          turnkeyWalletId: subOrg.walletId,
+        },
+        tx,
+      );
+      await this.audit.record(
+        {
+          action: AuditAction.VaultInit,
+          outcome: "success",
+          detail: { subOrgId: subOrg.subOrgId, subOrgName: subOrg.subOrgName },
+        },
+        tx,
+      );
     });
 
     logInfo("vault.initialized", { subOrgName: subOrg.subOrgName });
@@ -111,9 +118,9 @@ export class VaultService {
    * row records is a failed init that has yet to be retried, and saying otherwise would send
    * the operator away satisfied.
    */
-  status(): VaultStatus {
+  async status(): Promise<VaultStatus> {
     const adopted = this.vault.initializedState !== undefined;
-    const state = this.vaultState.load();
+    const state = await this.vaultState.load();
     return {
       mode: this.vault.mode,
       initialized: state?.initialized === true && adopted,
@@ -132,7 +139,7 @@ export class VaultService {
    * than surfacing as an HTTP error, and the server never binds.
    */
   async rehydrate(): Promise<void> {
-    const state = this.vaultState.load();
+    const state = await this.vaultState.load();
     if (!state?.initialized) {
       // Also the interrupted-init case, where a key pair is reserved but no sub-organisation
       // exists yet: POST /v1/vault/init resumes it, and until then the provider stays
@@ -153,14 +160,16 @@ export class VaultService {
    * on the volume, or a new one holding a freshly minted key pair, written before anything
    * leaves the process.
    */
-  private reserveApiKeyPair(existing: VaultStateRecord | undefined): VaultStateRecord {
+  private async reserveApiKeyPair(
+    existing: VaultStateRecord | undefined,
+  ): Promise<VaultStateRecord> {
     if (existing) {
       logInfo("vault.api_key_pair_resumed", { apiPublicKey: existing.subOrgApiPublicKey });
       return existing;
     }
 
     const generated = generateApiKeyPair();
-    const reserved = this.vaultState.reserve(
+    const reserved = await this.vaultState.reserve(
       {
         mode: this.vault.mode,
         subOrgApiPublicKey: generated.publicKeyHex,
@@ -228,7 +237,7 @@ export class VaultService {
    * Failing the boot on it would let one badly-timed crash brick the service permanently.
    */
   private async assertVaultMatchesDbAddresses(): Promise<void> {
-    const managedAddressesFromDb = this.wallets.allEoaAddresses();
+    const managedAddressesFromDb = await this.wallets.allEoaAddresses();
     const heldByVault = new Set((await this.vault.listAddresses()).map(lower));
 
     const untracked = [...heldByVault].filter(

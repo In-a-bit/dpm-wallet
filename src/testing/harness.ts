@@ -10,6 +10,7 @@ import { API_KEY_HEADER } from "../common/guards/api-key.guard";
 import { IDEMPOTENCY_KEY_HEADER } from "../common/interceptors/idempotency.interceptor";
 import type { Db } from "../db/client";
 import { runMigrations } from "../db/migrate";
+import { createTestDatabase, type TestDatabase } from "./pg-test-db";
 import { VaultStateRepository } from "../db/repositories/vault-state.repo";
 import { WalletRepository } from "../db/repositories/wallet.repo";
 import { AuditLog } from "../observability/audit";
@@ -52,12 +53,14 @@ export type HarnessOptions = {
 };
 
 /**
- * Boots the real application against an in-memory database and a local signer. Only the two
- * outbound collaborators are replaced, so a test exercises the actual guards, interceptor,
- * validation pipe, exception filter, migrations and repositories rather than a hand-wired
- * subset.
+ * Boots the real application against a throwaway Postgres database and a local signer. Only
+ * the two outbound collaborators are replaced, so a test exercises the actual guards,
+ * interceptor, validation pipe, exception filter, migrations and repositories rather than a
+ * hand-wired subset.
  *
- * A reboot test that reuses a `databasePath` will find the schema already applied, because
+ * Pass `DATABASE_URL` to boot against a database the caller owns — that is how a restart test
+ * gets two boots over one set of rows. Anything else gets a fresh database that `close()`
+ * drops. A reboot against a reused database finds the schema already applied, because
  * migrating is idempotent.
  */
 export async function startHarness(
@@ -67,10 +70,15 @@ export async function startHarness(
   const { TEST_MNEMONIC: mnemonic, ...env } = overrides;
   const provider = new FakeSignerProvider(mnemonic);
   const dpmApi = options.dpmApi ?? new FakeDpmApi();
+  const ownedDatabase = env.DATABASE_URL ? undefined : await createTestDatabase();
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(CONFIG)
-    .useValue(loadConfig(testEnv(env)))
+    .useValue(
+      loadConfig(
+        testEnv({ ...(ownedDatabase ? { DATABASE_URL: ownedDatabase.url } : {}), ...env }),
+      ),
+    )
     .overrideProvider(SIGNER_PROVIDER)
     .useValue(provider)
     .overrideProvider(DPM_API)
@@ -80,9 +88,9 @@ export async function startHarness(
   const app = moduleRef.createNestApplication<NestExpressApplication>({ bodyParser: false });
   configureApp(app);
   // The service no longer migrates itself, so a test applies the schema the way a deploy does:
-  // after the volume is open, before anything boots against it.
-  runMigrations(app.get<Db>(DB));
-  await initOrClose(app);
+  // after the pool is open, before anything boots against it.
+  await runMigrations(app.get<Db>(DB));
+  await initOrClose(app, ownedDatabase);
 
   const send = async <T>(
     method: "get" | "post",
@@ -110,19 +118,28 @@ export async function startHarness(
     db: app.get<Db>(DB),
     get: (path, requestOptions) => send("get", path, requestOptions),
     post: (path, requestOptions) => send("post", path, requestOptions),
-    close: () => app.close(),
+    // Dropping after `app.close()`, so the pool is drained and the database has no session
+    // left holding it. A caller-supplied database is the caller's to drop.
+    close: async () => {
+      await app.close();
+      await ownedDatabase?.drop();
+    },
   };
 }
 
 /**
- * A boot that fails during rehydration still holds the volume's write lock, so the container
- * has to be torn down before the failure is re-thrown to the test.
+ * A boot that fails during rehydration leaves the pool open, so the container has to be torn
+ * down — and its database removed — before the failure is re-thrown to the test.
  */
-async function initOrClose(app: INestApplication): Promise<void> {
+async function initOrClose(
+  app: INestApplication,
+  database: TestDatabase | undefined,
+): Promise<void> {
   try {
     await app.init();
   } catch (err) {
     await app.close().catch(() => undefined);
+    await database?.drop().catch(() => undefined);
     throw err;
   }
 }

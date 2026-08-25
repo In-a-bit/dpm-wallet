@@ -1,5 +1,6 @@
 import { Injectable } from "@nestjs/common";
 
+import type { Executor } from "../db/client";
 import {
   AuditRepository,
   type AuditOutcome,
@@ -25,19 +26,26 @@ export type AuditEntry = {
 export class AuditLog {
   constructor(private readonly repository: AuditRepository) {}
 
-  record(entry: AuditEntry): void {
+  /**
+   * `executor` places the row inside a caller's transaction, so a trail entry cannot outlive
+   * the write it describes being rolled back.
+   */
+  async record(entry: AuditEntry, executor?: Executor): Promise<void> {
     const detail = entry.detail ? (redact(entry.detail) as Record<string, unknown>) : undefined;
-    this.repository.record({
-      ref: entry.ref ?? null,
-      action: entry.action,
-      outcome: entry.outcome,
-      ...(detail ? { detail } : {}),
-      createdAt: new Date().toISOString(),
-    });
+    await this.repository.record(
+      {
+        ref: entry.ref ?? null,
+        action: entry.action,
+        outcome: entry.outcome,
+        ...(detail ? { detail } : {}),
+        createdAt: new Date().toISOString(),
+      },
+      executor,
+    );
     logInfo(entry.action, { ref: entry.ref ?? undefined, outcome: entry.outcome, ...detail });
   }
 
-  query(query: AuditQuery): AuditPage {
+  query(query: AuditQuery): Promise<AuditPage> {
     return this.repository.query(query);
   }
 }

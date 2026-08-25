@@ -12,8 +12,8 @@ export class AuditController {
   constructor(private readonly audit: AuditLog) {}
 
   @Get()
-  query(@Query() query: AuditQueryDto) {
-    const page = this.audit.query(query);
+  async query(@Query() query: AuditQueryDto) {
+    const page = await this.audit.query(query);
     return {
       events: page.events,
       total: page.total,

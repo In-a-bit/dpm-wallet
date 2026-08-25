@@ -54,7 +54,7 @@ export class MetaTxService {
   ): Promise<SubmitTransactionRequest> {
     assertDpmRegistered(wallet);
     const body = await this.buildThroughSdk(kind, wallet, args);
-    this.audit.record({
+    await this.audit.record({
       ref: wallet.ref,
       action: META_TX_AUDIT_ACTION[kind],
       outcome: "success",
@@ -79,7 +79,7 @@ export class MetaTxService {
         this.commonFor(wallet),
       );
     } catch (cause) {
-      this.recordFailure(cause, wallet, kind);
+      await this.recordFailure(cause, wallet, kind);
       throw translate(cause, wallet);
     }
   }
@@ -96,8 +96,8 @@ export class MetaTxService {
     );
   }
 
-  private recordFailure(cause: unknown, wallet: Wallet, kind: MetaTxKind): void {
-    this.audit.record({
+  private async recordFailure(cause: unknown, wallet: Wallet, kind: MetaTxKind): Promise<void> {
+    await this.audit.record({
       ref: wallet.ref,
       action: META_TX_AUDIT_ACTION[kind],
       outcome: "failure",

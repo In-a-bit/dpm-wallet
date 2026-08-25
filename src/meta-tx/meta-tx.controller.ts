@@ -68,11 +68,11 @@ export class MetaTxController {
     });
   }
 
-  private build(
+  private async build(
     kind: MetaTxKind,
     ref: string,
     args: MetaTxArgs,
   ): Promise<SubmitTransactionRequest> {
-    return this.metaTx.build(kind, this.addresses.get(ref), args);
+    return this.metaTx.build(kind, await this.addresses.get(ref), args);
   }
 }

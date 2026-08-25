@@ -1,9 +1,6 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-
 import { FakeDpmApi } from "../src/testing/fake-dpm-api";
 import { startHarness, type Harness } from "../src/testing/harness";
+import { createTestDatabase, type TestDatabase } from "../src/testing/pg-test-db";
 
 const CUSTOMER = "customer-12345";
 
@@ -12,33 +9,31 @@ const OTHER_ORGANIZATION_MNEMONIC =
   "legal winner thank year wave sausage worth useful legal winner thank yellow";
 
 /**
- * These tests need a file-backed database: an in-memory one dies with the process, and the whole
- * point is that a restart rebuilds its state from the volume.
+ * These tests own their database rather than letting each boot mint one, because the whole
+ * point is that a second boot rebuilds its state from what the first one wrote.
  */
 describe("cold-start recovery", () => {
-  let volume: string;
-  let databasePath: string;
+  let database: TestDatabase;
   let harness: Harness | undefined;
   // One stub across every boot in a test, the way a sub-organisation outlives a container.
   let dpmApi: FakeDpmApi;
 
-  beforeEach(() => {
-    volume = mkdtempSync(join(tmpdir(), "dpm-wallet-"));
-    databasePath = join(volume, "dpm-wallet.sqlite");
+  beforeEach(async () => {
+    database = await createTestDatabase();
     dpmApi = new FakeDpmApi();
   });
 
   afterEach(async () => {
     await harness?.close();
     harness = undefined;
-    rmSync(volume, { recursive: true, force: true });
+    await database.drop();
   });
 
   async function boot(overrides: Record<string, string> = {}): Promise<Harness> {
-    return startHarness({ DATABASE_PATH: databasePath, ...overrides }, { dpmApi });
+    return startHarness({ DATABASE_URL: database.url, ...overrides }, { dpmApi });
   }
 
-  it("restores the vault and directory from the volume", async () => {
+  it("restores the vault and directory from the database", async () => {
     const first = await boot();
     await first.post("/v1/vault/init");
     const created = await first.post("/v1/addresses", { body: { ref: CUSTOMER } });
@@ -55,11 +50,11 @@ describe("cold-start recovery", () => {
   });
 
   // The container holds no credential from its environment, so a restart that failed to
-  // recover the key pair from the volume could reach Turnkey at all.
-  it("re-adopts the sub-organisation credentials from the volume", async () => {
+  // recover the key pair from the database could reach Turnkey at all.
+  it("re-adopts the sub-organisation credentials from the database", async () => {
     const first = await boot();
     await first.post("/v1/vault/init");
-    const provisioned = first.vaultState.load();
+    const provisioned = await first.vaultState.load();
     await first.close();
 
     harness = await boot();
@@ -79,7 +74,7 @@ describe("cold-start recovery", () => {
     const first = await boot();
     first.dpmApi.failWith = new Error("dpm-api is down");
     await first.post("/v1/vault/init");
-    const reserved = first.vaultState.load();
+    const reserved = await first.vaultState.load();
     await first.close();
 
     dpmApi.failWith = undefined;

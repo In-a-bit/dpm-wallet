@@ -54,7 +54,7 @@ export function decryptCredential(key: EncryptionKey, stored: string): string {
   } catch (cause) {
     throw new DpmwError(
       "INTERNAL_ERROR",
-      "Stored credential could not be decrypted; DPM_WALLET_ENCRYPTION_KEY does not match the volume",
+      "Stored credential could not be decrypted; DPM_WALLET_ENCRYPTION_KEY does not match the database",
       { cause },
     );
   }

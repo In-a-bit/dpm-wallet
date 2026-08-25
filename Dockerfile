@@ -1,9 +1,10 @@
 # syntax=docker/dockerfile:1
 #
 # Single image an operator runs inside their own infrastructure. Listens on 0.0.0.0:8090;
-# probe GET /v1/health. The SQLite database lives on the /data volume, never in the image.
+# probe GET /v1/health. Every table lives in the Postgres database DATABASE_URL names; the only
+# thing on the /data volume is the plaintext API key pair backup.
 #
-# Starting the container migrates the volume first (see CMD). That step lives here rather than
+# Starting the container migrates the database first (see CMD). That step lives here rather than
 # in the service, so it is visible in the image and can be skipped by overriding the command —
 # `docker run … node dist/main` starts without touching the schema.
 
@@ -12,26 +13,20 @@ ARG NODE_VERSION=22
 # ── Stage 1: build ───────────────────────────────────────────────────────────
 FROM node:${NODE_VERSION}-alpine AS builder
 
-# better-sqlite3 ships prebuilt binaries for glibc only, so on Alpine's musl its native
-# addon is always compiled from source. The toolchain is required here, not optional.
-RUN apk add --no-cache python3 make g++
-
 WORKDIR /app
 
 COPY package.json package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \
     npm ci
 
-# nest-cli.json drives the build: it selects tsconfig.build.json and copies the SQL migrations
-# into dist as build assets.
+# nest-cli.json drives the build, selecting tsconfig.build.json. The migrations need no asset
+# copying: they are TypeScript classes, so the ordinary compile emits them into dist.
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src/ src/
 
 RUN npm run build
 
-# Drop the dev dependencies from the tree the runtime stage inherits. Pruning rather than
-# reinstalling keeps the addon that was just compiled, so it is built exactly once and the
-# runtime image needs no compiler at all.
+# Drop the dev dependencies from the tree the runtime stage inherits.
 RUN npm prune --omit=dev
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
@@ -44,7 +39,6 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 COPY package.json ./
-# Same Node major and same Alpine base as the builder, so the compiled addon's ABI matches.
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 

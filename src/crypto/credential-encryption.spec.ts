@@ -52,7 +52,7 @@ describe("credential encryption", () => {
   it("fails closed under a different key", () => {
     const stored = encryptCredential(key, API_PRIVATE_KEY);
     expect(() => decryptCredential(parseEncryptionKey(OTHER_KEY_HEX), stored)).toThrow(
-      /does not match the volume/,
+      /does not match the database/,
     );
   });
 

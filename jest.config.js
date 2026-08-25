@@ -10,4 +10,7 @@ module.exports = {
   collectCoverageFrom: ["src/**/*.ts", "!src/**/*.spec.ts", "!src/testing/**"],
   coverageDirectory: "./coverage",
   testEnvironment: "node",
+  // Every boot creates a database and migrates it against a real server, which the 5s default
+  // does not cover.
+  testTimeout: 30000,
 };

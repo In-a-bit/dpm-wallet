@@ -8,24 +8,22 @@ import { runMigrations } from "./migrate";
 /**
  * The migration step, as its own process.
  *
- * `drizzle-kit migrate` covers this during development, but the runtime image drops the dev
- * dependencies, so the container needs a path to the schema that only uses what ships with it.
- * This reads the same `DATABASE_PATH` the service does, so the operator cannot migrate one
- * volume and start against another.
+ * The TypeORM CLI covers this during development, but the runtime image drops the dev
+ * dependencies — and with them ts-node, which the CLI needs to read the TypeScript data
+ * source. This reads the same `DATABASE_URL` the service does, so the operator cannot
+ * migrate one database and start against another.
  */
-function main(): void {
-  const { databasePath } = loadConfig();
-  const db = openDatabase(databasePath);
+async function main(): Promise<void> {
+  const { databaseUrl } = loadConfig();
+  const db = await openDatabase(databaseUrl);
   try {
-    runMigrations(db);
+    await runMigrations(db);
   } finally {
-    closeDatabase(db);
+    await closeDatabase(db);
   }
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err: unknown) => {
   logError("db.migrate_failed", { err });
   process.exit(1);
-}
+});
