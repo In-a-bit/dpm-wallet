@@ -1,4 +1,4 @@
-import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/server";
+import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/turnkey";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Address, Hex } from "viem";
 

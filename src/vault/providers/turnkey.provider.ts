@@ -5,6 +5,7 @@ import type { Config } from "../../config";
 import { DpmwError } from "../../errors";
 import { logDebug } from "../../observability/log";
 import type {
+  ProviderAccess,
   ProviderAccount,
   ProviderCredentials,
   SignerProvider,
@@ -55,15 +56,16 @@ export class TurnkeySignerProvider implements SignerProvider {
       apiPublicKey: credentials.apiPublicKey,
       apiPrivateKey: credentials.apiPrivateKey,
     }).apiClient();
-    this.session = {
-      subOrgId: credentials.subOrgId,
-      walletId: credentials.walletId,
-      client,
-    };
+    this.session = { ...credentials, client };
     logDebug("turnkey.credentials_adopted", {
       subOrgId: credentials.subOrgId,
       walletId: credentials.walletId,
     });
+  }
+
+  getCredentials(): ProviderAccess {
+    const { client: _client, ...credentials } = this.requireSession();
+    return { ...credentials, apiBaseUrl: this.apiBaseUrl };
   }
 
   async createAccount(derivationPath: string, ref: string): Promise<ProviderAccount> {
@@ -174,11 +176,11 @@ export class TurnkeySignerProvider implements SignerProvider {
 
 /**
  * The client and what it acts on, bound together so no call can be made against a sub-org
- * or wallet the credentials do not belong to.
+ * or wallet the credentials do not belong to. The key pair is kept alongside the client, not
+ * only inside it, so the same credentials can be handed to a second client — the SDK's —
+ * which stamps its own requests with them.
  */
-type TurnkeySession = {
-  subOrgId: string;
-  walletId: string;
+type TurnkeySession = ProviderCredentials & {
   client: TurnkeyApiClient;
 };
 

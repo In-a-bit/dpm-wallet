@@ -8,7 +8,7 @@ import {
   type FetchLike,
   type InternalWalletPort,
   type SubmitTransactionRequest,
-} from "@inabit-com/dpm-sdk/server";
+} from "@inabit-com/dpm-sdk/turnkey";
 
 import type { Config } from "../config";
 
@@ -26,21 +26,6 @@ export type MetaTxBuildRequest = {
   amountDecimal?: string;
   recipient?: string;
 };
-
-/**
- * Projects config onto the shape the SDK expects. This is the whole reason the service
- * needs no `GET /contract-info` call.
- */
-export function toContractInfo(config: Config): ContractInfo {
-  return {
-    chainId: String(config.chainId),
-    collateral: config.contracts.collateral,
-    ctf: config.contracts.ctf,
-    ctfExchange: config.contracts.ctfExchange,
-    proxyFactory: config.contracts.proxyFactory,
-    relayHub: config.contracts.relayHub,
-  };
-}
 
 /**
  * Dispatches to the SDK's build-only meta-transaction functions, which sign and return the
@@ -92,10 +77,14 @@ export type MetaTxCommonParams = {
   fetchImpl: FetchLike;
 };
 
-export function metaTxCommonParams(config: Config, fetchImpl: FetchLike): MetaTxCommonParams {
+export function metaTxCommonParams(
+  contractInfo: ContractInfo,
+  config: Config,
+  fetchImpl: FetchLike,
+): MetaTxCommonParams {
   return {
     relayerBaseUrl: config.relayer.baseUrl,
-    contractInfo: toContractInfo(config),
+    contractInfo,
     fetchImpl,
   };
 }

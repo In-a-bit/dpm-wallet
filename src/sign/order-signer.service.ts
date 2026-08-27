@@ -3,9 +3,10 @@ import {
   buildOrderTypedData,
   EXCHANGE_DOMAIN_NAME,
   formatCancelOrderMessage,
+  type InternalWalletPort,
   type OrderFields,
   type OrderParams,
-} from "@inabit-com/dpm-sdk/server";
+} from "@inabit-com/dpm-sdk/turnkey";
 import { Inject, Injectable } from "@nestjs/common";
 import { hashTypedData, toHex, type Address, type Hex, type TypedDataDefinition } from "viem";
 
@@ -13,8 +14,9 @@ import type { Config } from "../config";
 import type { Wallet } from "../db/repositories/wallet.repo";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
-import { CONFIG, KEY_VAULT } from "../tokens";
-import type { KeyVault } from "../vault/key-vault.interface";
+import { translateSigningFailure } from "../sdk/signing-failure";
+import type { SigningSdkSource } from "../sdk/signing-sdk";
+import { CONFIG, SIGNING_SDK } from "../tokens";
 
 export type SignOrderRequest = {
   /** Operator-supplied source of funds; signed as given and never overridden. */
@@ -52,14 +54,14 @@ export type SignedCancel = {
 export class OrderSignerService {
   constructor(
     private readonly audit: AuditLog,
-    @Inject(KEY_VAULT) private readonly vault: KeyVault,
+    @Inject(SIGNING_SDK) private readonly sdks: SigningSdkSource,
     @Inject(CONFIG) private readonly config: Config,
   ) {}
 
   async signOrder(wallet: Wallet, request: SignOrderRequest): Promise<SignedOrder> {
     const order = this.buildOrder(wallet, request);
     const typedData = this.typedDataFor(order);
-    const signature = await this.vault.signTypedData(wallet.eoaAddress, typedData);
+    const signature = await this.signTypedData(wallet.eoaAddress, typedData);
     const orderHash = hashTypedData(typedData);
     await this.audit.record({
       ref: wallet.ref,
@@ -79,13 +81,13 @@ export class OrderSignerService {
   }
 
   /**
-   * The plaintext is converted to hex before signing so the vault takes the raw-bytes
+   * The plaintext is converted to hex before signing so the signer takes the raw-bytes
    * branch, matching what browser providers do with `personal_sign`. Both paths hash the
    * same bytes, so the exchange recovers the same signer either way.
    */
   async signCancel(wallet: Wallet, orderHash: string, marketId: string): Promise<SignedCancel> {
     const message = formatCancelOrderMessage(orderHash, marketId);
-    const signature = await this.vault.personalSign(wallet.eoaAddress, toHex(message));
+    const signature = await this.personalSign(wallet.eoaAddress, toHex(message));
     await this.audit.record({
       ref: wallet.ref,
       action: AuditAction.SignCancel,
@@ -93,6 +95,29 @@ export class OrderSignerService {
       detail: { orderHash, marketId, signature },
     });
     return { signer: wallet.eoaAddress, message, signature };
+  }
+
+  private async signTypedData(address: Address, typedData: TypedDataDefinition): Promise<Hex> {
+    const port = await this.walletPortFor(address);
+    try {
+      return (await port.signTypedDataV4(address, JSON.stringify(typedData))) as Hex;
+    } catch (cause) {
+      throw translateSigningFailure(cause) ?? cause;
+    }
+  }
+
+  private async personalSign(address: Address, message: Hex): Promise<Hex> {
+    const port = await this.walletPortFor(address);
+    try {
+      return (await port.personalSign(message, address)) as Hex;
+    } catch (cause) {
+      throw translateSigningFailure(cause) ?? cause;
+    }
+  }
+
+  private async walletPortFor(address: Address): Promise<InternalWalletPort> {
+    const sdk = await this.sdks.getSdk();
+    return sdk.getWalletPortFor(address);
   }
 
   private buildOrder(wallet: Wallet, request: SignOrderRequest): OrderFields {

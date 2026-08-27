@@ -27,6 +27,13 @@ export type ProviderCredentials = {
   apiPrivateKey: string;
 };
 
+/**
+ * The credentials plus the endpoint they authorise against — everything a second client
+ * needs to reach the same sub-organisation. The endpoint comes from config rather than from
+ * `adoptCredentials`, so it is added here rather than stored on the volume.
+ */
+export type ProviderAccess = ProviderCredentials & { apiBaseUrl: string };
+
 export type ProviderAccount = {
   address: Address;
   /** Provider-side identifier, stored for the cold-start consistency check. */
@@ -47,6 +54,12 @@ export interface SignerProvider {
    * no sub-organisation to act on.
    */
   adoptCredentials(credentials: ProviderCredentials): void;
+
+  /**
+   * What was adopted, for handing to a client that signs through the SDK instead of through
+   * this provider. Throws while nothing is adopted, like every other call.
+   */
+  getCredentials(): ProviderAccess;
 
   /** Creates (or returns) the account at `derivationPath`. Idempotent per path. */
   createAccount(derivationPath: string, ref: string): Promise<ProviderAccount>;

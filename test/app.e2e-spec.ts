@@ -1,4 +1,4 @@
-import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/server";
+import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/turnkey";
 import { recoverMessageAddress } from "viem";
 import { startHarness, type Harness } from "../src/testing/harness";
 

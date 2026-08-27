@@ -2,6 +2,7 @@ import { sign, mnemonicToAccount, type HDAccount } from "viem/accounts";
 import { getAddress, serializeSignature, type Address, type Hex } from "viem";
 
 import type {
+  ProviderAccess,
   ProviderAccount,
   ProviderCredentials,
   SignerProvider,
@@ -10,6 +11,12 @@ import type {
 
 /** A well-known BIP-39 test vector; it holds no value on any network. */
 export const TEST_MNEMONIC = "test test test test test test test test test test test junk";
+
+/**
+ * Reported as the endpoint the credentials authorise against. Nothing in a test reaches it:
+ * signing goes through this provider, not through a client built from the credentials.
+ */
+const FAKE_API_BASE_URL = "https://turnkey.invalid";
 
 /**
  * Accounts, keyed by mnemonic, outliving any one provider instance. A real custody organisation
@@ -59,6 +66,11 @@ export class FakeSignerProvider implements SignerProvider {
 
   adoptCredentials(credentials: ProviderCredentials): void {
     this.adopted = credentials;
+  }
+
+  getCredentials(): ProviderAccess {
+    if (!this.adopted) throw new Error("fake provider has adopted no credentials");
+    return { ...this.adopted, apiBaseUrl: FAKE_API_BASE_URL };
   }
 
   async createAccount(derivationPath: string, _ref: string): Promise<ProviderAccount> {

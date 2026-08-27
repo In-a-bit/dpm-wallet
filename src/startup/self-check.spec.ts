@@ -1,4 +1,4 @@
-import { EXCHANGE_DOMAIN_NAME } from "@inabit-com/dpm-sdk/server";
+import { EXCHANGE_DOMAIN_NAME } from "@inabit-com/dpm-sdk/turnkey";
 import { assertExchangeDomain, fixtureDigest } from "./self-check";
 
 describe("assertExchangeDomain", () => {

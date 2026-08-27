@@ -3,7 +3,7 @@ import {
   EXCHANGE_DOMAIN_NAME,
   SignatureType,
   type OrderFields,
-} from "@inabit-com/dpm-sdk/server";
+} from "@inabit-com/dpm-sdk/turnkey";
 import { hashTypedData, type Hex, type TypedDataDefinition } from "viem";
 
 import { DpmwError } from "../errors";

@@ -1,4 +1,4 @@
-import type { SubmitTransactionRequest } from "@inabit-com/dpm-sdk/server";
+import type { SubmitTransactionRequest } from "@inabit-com/dpm-sdk/turnkey";
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 

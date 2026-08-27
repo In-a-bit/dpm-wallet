@@ -2,7 +2,7 @@ import {
   RelayerError,
   ValidationError,
   type SubmitTransactionRequest,
-} from "@inabit-com/dpm-sdk/server";
+} from "@inabit-com/dpm-sdk/turnkey";
 import { Inject, Injectable } from "@nestjs/common";
 
 import type { Config } from "../config";
@@ -11,15 +11,15 @@ import { customerNotRegistered, DpmwError, validationFailed } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
 import { createBuilderKeyFetch } from "../sdk/builder-key-fetch";
-import { VaultWalletAdapter } from "../sdk/vault-wallet-adapter";
+import { translateSigningFailure } from "../sdk/signing-failure";
+import type { SigningSdk, SigningSdkSource } from "../sdk/signing-sdk";
 import {
   buildMetaTx,
   metaTxCommonParams,
   type MetaTxCommonParams,
   type MetaTxKind,
 } from "../sdk/wiring";
-import { CONFIG, KEY_VAULT } from "../tokens";
-import type { KeyVault } from "../vault/key-vault.interface";
+import { CONFIG, SIGNING_SDK } from "../tokens";
 
 export type MetaTxArgs = {
   conditionId?: string;
@@ -43,7 +43,7 @@ const UNREGISTERED_EOA_MARKER = "user not found";
 export class MetaTxService {
   constructor(
     private readonly audit: AuditLog,
-    @Inject(KEY_VAULT) private readonly vault: KeyVault,
+    @Inject(SIGNING_SDK) private readonly sdks: SigningSdkSource,
     @Inject(CONFIG) private readonly config: Config,
   ) {}
 
@@ -69,14 +69,17 @@ export class MetaTxService {
     args: MetaTxArgs,
   ): Promise<SubmitTransactionRequest> {
     try {
+      // Inside the try: an uninitialised vault or an unreachable relayer is a failed build
+      // like any other, and belongs in the audit trail under the kind that was attempted.
+      const sdk = await this.sdks.getSdk();
       return await buildMetaTx(
         kind,
         {
-          wallet: new VaultWalletAdapter(this.vault, wallet.eoaAddress),
+          wallet: sdk.getWalletPortFor(wallet.eoaAddress),
           proxyWallet: wallet.proxyAddress,
           ...args,
         },
-        this.commonFor(wallet),
+        this.commonFor(sdk, wallet),
       );
     } catch (cause) {
       await this.recordFailure(cause, wallet, kind);
@@ -89,8 +92,9 @@ export class MetaTxService {
    * rather than once: `relayer-api` resolves the caller from the secret and the address
    * together on the reads a build makes.
    */
-  private commonFor(wallet: Wallet): MetaTxCommonParams {
+  private commonFor(sdk: SigningSdk, wallet: Wallet): MetaTxCommonParams {
     return metaTxCommonParams(
+      sdk.contractInfo,
       this.config,
       createBuilderKeyFetch(this.config.relayer.builderApiKey, wallet.eoaAddress),
     );
@@ -122,6 +126,8 @@ const META_TX_AUDIT_ACTION: Record<MetaTxKind, AuditAction> = {
  */
 function translate(cause: unknown, wallet: Wallet): unknown {
   if (cause instanceof DpmwError) return cause;
+  const signingFailure = translateSigningFailure(cause);
+  if (signingFailure) return signingFailure;
   if (cause instanceof ValidationError) return validationFailed(cause.message, fieldOf(cause));
   if (!(cause instanceof RelayerError)) return cause;
   if (mentionsUnregisteredEoa(cause)) return customerNotRegistered(wallet.ref);

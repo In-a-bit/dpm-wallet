@@ -11,16 +11,18 @@ export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export type LogLevel = (typeof LOG_LEVELS)[number];
 
 /**
- * The addresses a `GET /contract-info` call would return. Supplying them as config is
- * what removes that outbound dependency, so every field here is required.
+ * The addresses this service needs without asking anyone. Everything else a signed
+ * transaction refers to — the collateral token, the CTF, the RelayHub — is read from the
+ * relayer's `GET /contract-info` by the SDK, so it is not configured twice.
+ *
+ * These three cannot be: `proxyFactory` and `proxyImplementation` derive a proxy address
+ * locally, which `POST /v1/addresses` answers with before any proxy is deployed, and
+ * `ctfExchange` is the EIP-712 `verifyingContract` an order is signed against.
  */
 export type ContractAddresses = {
-  collateral: Address;
-  ctf: Address;
   ctfExchange: Address;
   proxyFactory: Address;
   proxyImplementation: Address;
-  relayHub: Address;
 };
 
 export type Config = {
@@ -100,12 +102,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
 function parseContracts(env: NodeJS.ProcessEnv): ContractAddresses {
   return {
-    collateral: requiredAddress("CONTRACT_COLLATERAL", env.CONTRACT_COLLATERAL),
-    ctf: requiredAddress("CONTRACT_CTF", env.CONTRACT_CTF),
     ctfExchange: requiredAddress("CONTRACT_CTF_EXCHANGE", env.CONTRACT_CTF_EXCHANGE),
     proxyFactory: requiredAddress("CONTRACT_PROXY_FACTORY", env.CONTRACT_PROXY_FACTORY),
     proxyImplementation: requiredAddress("CONTRACT_PROXY_IMPL", env.CONTRACT_PROXY_IMPL),
-    relayHub: requiredAddress("CONTRACT_RELAY_HUB", env.CONTRACT_RELAY_HUB),
   };
 }
 

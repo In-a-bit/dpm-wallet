@@ -1,4 +1,4 @@
-import { createProxyStructHash } from "@inabit-com/dpm-sdk/server";
+import { createProxyStructHash } from "@inabit-com/dpm-sdk/turnkey";
 import { hashMessage, recoverAddress } from "viem";
 import { BUILDER_ADDRESS_HEADER, BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
 import { startHarness, type Harness } from "../testing/harness";

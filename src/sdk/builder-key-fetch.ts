@@ -1,4 +1,4 @@
-import type { FetchLike } from "@inabit-com/dpm-sdk/server";
+import type { FetchLike } from "@inabit-com/dpm-sdk/turnkey";
 
 /**
  * The header `relayer-api` resolves through `builderauth` for a builder's own backend. It
