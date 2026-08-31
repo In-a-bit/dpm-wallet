@@ -1,3 +1,40 @@
+# DEVELOPMENT stack — the default, so a bare `docker compose up` is the local one. Production is
+# docker-compose.prod.yml, which builds Dockerfile.prod and has none of the sibling-checkout
+# machinery below.
+#
+# The image is built once and used by two services: `migrate` applies the schema and exits,
+# then `dpm-wallet` serves against it. Sharing the tag is what keeps them honest — the
+# migrations that ran are exactly the ones the running code was compiled with.
+x-dpm-wallet-image: &dpm-wallet-image
+  build:
+    context: .
+    dockerfile: Dockerfile.dev
+    # @inabit-com/dpm-sdk is a `file:../dpm-sdk` dependency living outside this context. It is
+    # handed to the build as a named context the Dockerfile's `sdk` stage copies from, so the
+    # sibling checkout is compiled into the image instead of breaking `npm ci`.
+    additional_contexts:
+      dpm-sdk: ../dpm-sdk
+  image: dpm-wallet:dev
+  env_file: .env
+  # Reached over the compose network rather than through the published port, so the host
+  # mapping below is only for psql and the TypeORM CLI from a workstation.
+  # `localhost` in a container is the container. dpm-api and relayer-api run on the developer's
+  # machine, so they are reached through the host gateway; on Linux that name does not exist
+  # unless it is mapped here.
+  extra_hosts:
+    - "host.docker.internal:host-gateway"
+  environment:
+    # The mounted volume, overriding whatever .env sets for host-side `npm run dev` —
+    # a relative path resolves against /app in here, which the service user cannot write.
+    DATA_DIR: /data
+    # Same split as DATA_DIR: .env keeps the `localhost` URLs that host-side `npm run dev` needs,
+    # and the container gets the gateway equivalents. These two lines *always* win over .env, so
+    # pointing the container somewhere else — a shared staging deployment, say — means setting
+    # DPM_API_BASE_URL_DOCKER / RELAYER_BASE_URL_DOCKER rather than editing .env.
+    DPM_API_BASE_URL: ${DPM_API_BASE_URL_DOCKER:-http://host.docker.internal:8086}
+    RELAYER_BASE_URL: ${RELAYER_BASE_URL_DOCKER:-http://host.docker.internal:8085}
+    DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:-postgres}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
+
 services:
   postgres:
     image: postgres:18-alpine
@@ -21,33 +58,45 @@ services:
       timeout: 5s
       retries: 10
 
-  # Migrations run from the image's CMD, before the service starts — see the Dockerfile.
+  # One-shot: runs the pending migrations, then exits 0. Every `up` runs it — TypeORM skips
+  # what the migrations table already records — and a failure leaves it exited non-zero, which
+  # is what holds dpm-wallet back rather than letting it start against a stale schema.
+  # Run it alone with `docker compose run --rm migrate`.
+  migrate:
+    <<: *dpm-wallet-image
+    command: ["node", "dist/db/migrate-cli"]
+    depends_on:
+      postgres:
+        # A database that accepts connections, not one that has merely been created.
+        condition: service_healthy
+    # A migration that fails should stay failed and be looked at, not be retried in a loop.
+    restart: "no"
+
   dpm-wallet:
-    build: .
-    ports: ["8090:8090"]
-    env_file: .env
-    # Reached over the compose network rather than through the published port, so the host
-    # mapping above is only for psql and the TypeORM CLI from a workstation.
-    environment:
-      DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:-postgres}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
+    <<: *dpm-wallet-image
+    # Follows PORT from .env rather than hardcoding it — the service binds what the config says,
+    # and a mapping fixed at 8090 published a port nothing was listening on.
+    ports: ["${PORT:-8090}:${PORT:-8090}"]
+    # The image's CMD migrates before starting; here the migrate service has already done it,
+    # so the container goes straight to serving.
+    command: ["node", "dist/main"]
     # The one file left on the volume: the plaintext api-key-pair.plaintext.json backup
     # (see src/vault/api-key-pair-plaintext-backup.ts). Every table lives in Postgres.
     volumes: ["dpm-wallet-data:/data"]
     depends_on:
-      postgres:
-        # Migrating is the container's first act, so it has to wait for a database that
-        # accepts connections rather than one that has merely been created.
-        condition: service_healthy
+      # Implies a healthy postgres — migrate cannot have succeeded without one.
+      migrate:
+        condition: service_completed_successfully
     restart: unless-stopped
     # Let in-flight signing finish.
     stop_grace_period: 30s
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8090/v1/health"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8090}/v1/health"]
       interval: 30s
       timeout: 5s
       retries: 3
 
 volumes:
   # Survive `down`; destroyed only by `down -v`.
-  dpm-wallet-postgres-data:
+  postgres-data:
   dpm-wallet-data:

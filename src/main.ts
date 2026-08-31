@@ -2,10 +2,10 @@ import "dotenv/config";
 
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
-import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 
+import { mountApiDocs } from "./api-docs";
 import { AppModule } from "./app.module";
-import { BASE_PATH, configureApp } from "./app.setup";
+import { configureApp } from "./app.setup";
 import type { Config } from "./config";
 import { logError, logInfo } from "./observability/log";
 import { installShutdownHandlers } from "./startup/shutdown";
@@ -22,21 +22,6 @@ async function bootstrap(): Promise<void> {
   const config = app.get<Config>(CONFIG);
   await app.listen(config.port);
   logInfo("listening", { port: config.port, vaultMode: config.vaultMode });
-}
-
-function mountApiDocs(app: NestExpressApplication): void {
-  const document = SwaggerModule.createDocument(
-    app,
-    new DocumentBuilder()
-      .setTitle("dpm-wallet")
-      .setDescription(
-        "Operator-hosted address management and signing service for DPM prediction markets",
-      )
-      .setVersion("1")
-      .addApiKey({ type: "apiKey", name: "X-API-Key", in: "header" }, "apiKey")
-      .build(),
-  );
-  SwaggerModule.setup(`${BASE_PATH}/docs`, app, document);
 }
 
 bootstrap().catch((err) => {

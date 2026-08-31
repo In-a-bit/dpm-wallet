@@ -34,10 +34,48 @@ Default listen port: **8090**. Then initialise the vault once:
 curl -XPOST localhost:8090/v1/vault/init -H 'X-API-Key: <DPM_WALLET_API_KEY>'
 ```
 
-`@inabit-com/dpm-sdk` comes from the public npm registry, pinned to an exact version. This service
-imports only its `/server` entry point, which carries the signing and encoding primitives and no
-browser wallet code. When the SDK gains a change this service needs, publish it and bump the pin
-here — there is no local linking step.
+`@inabit-com/dpm-sdk` is a `file:../dpm-sdk` dependency — the sibling checkout of
+`git@github.com:In-a-bit/dpm-sdk.git`, linked rather than installed from a registry, so a change
+there is picked up by a rebuild instead of a publish. This service imports only its `/turnkey`
+entry point, which carries the signing and encoding primitives and no browser wallet code.
+
+That link is a development convenience, and it is the only thing the dev and production images
+disagree about — hence two of each file:
+
+| | Dockerfile | Compose | `@inabit-com/dpm-sdk` comes from |
+|---|---|---|---|
+| Development | `Dockerfile.dev` | `docker-compose.yml` (the default) | the sibling checkout, compiled from source |
+| Production | `Dockerfile.prod` | `docker-compose.prod.yml` | the npm registry, pinned to `DPM_SDK_VERSION` |
+
+The sibling sits outside the Docker build context, so the **dev** image takes it as a BuildKit
+named context: compose declares it (`additional_contexts: {dpm-sdk: ../dpm-sdk}`) and the
+`sdk` stage compiles it before the service's own `npm ci` runs. Only the SDK's build inputs are
+copied in — never its `node_modules`, and never its `dist`, so the image ships what the
+checked-out source compiles to rather than whatever was last built locally. Building it by hand
+needs the same context passed explicitly:
+
+```bash
+docker build -f Dockerfile.dev --build-context dpm-sdk=../dpm-sdk -t dpm-wallet:dev .
+```
+
+The **production** image has none of that: no named context, no sibling, no symlink. It builds
+from a clean clone with nothing beside it, because its install replaces the `file:` specifier with
+the published package before anything else happens.
+
+```bash
+docker build -f Dockerfile.prod --build-arg DPM_SDK_VERSION=0.2.0-beta.10 -t dpm-wallet:latest .
+```
+
+One wrinkle is worth knowing about before it bites: the sibling checkout declares the *same*
+version as the published package, so npm considers the existing `"link": true` lockfile node to
+already satisfy the pin and keeps it — the install then points at a path that does not exist in
+the image. Naming the package on the `npm install` command line, as `Dockerfile.prod` does, is
+what forces the registry tarball instead.
+
+> **The production image cannot compile yet.** The published `0.2.0-beta.10` exposes `.`,
+> `./magic`, `./privy`, `./lp` and `./react` — there is no `./turnkey`, the entry point this
+> service imports. That entry exists only on the unpublished `dpm-wallet-adaptation` branch. Cut a
+> release of `dpm-sdk` that includes it, then build with `DPM_SDK_VERSION` set to that version.
 
 ## API
 
@@ -233,10 +271,16 @@ new classes. Each one is reversible — `npm run db:revert` steps the last migra
 **Migrating is a step of its own, not something the service does to the database on its own
 initiative.** Where that step lives depends on how you start it:
 
-- **Container.** The image's `CMD` migrates and then starts the service, so `docker compose up`
-  needs nothing extra. Because it is the command rather than application code, you can watch it in
-  the logs and opt out — `docker compose run --rm dpm-wallet node dist/main` starts without
-  touching the schema, and `… node dist/db/migrate-cli` migrates without starting.
+- **Compose** (both stacks, identically). A `migrate` service of its own runs
+  `dist/db/migrate-cli` from the same image, exits, and only then does `dpm-wallet` start —
+  `depends_on: {migrate: service_completed_successfully}`. So `docker compose up` needs nothing
+  extra, the migration is a separate block of logs, and a failed one exits non-zero and holds the
+  service back instead of letting it run on a stale schema. Migrate on its own with
+  `docker compose run --rm migrate`; start without migrating with
+  `docker compose run --rm --no-deps dpm-wallet`.
+- **Plain `docker run`.** Outside compose the image's `CMD` migrates and then starts the service,
+  so a bare `docker run` needs nothing extra either. Override it to opt out: `… node dist/main`
+  starts without touching the schema, `… node dist/db/migrate-cli` migrates without starting.
 - **`npm`.** Nothing migrates implicitly. Run `npm run db:migrate` yourself, then start the
   service.
 
@@ -252,9 +296,10 @@ rather than failing later on a customer's first request.
 | `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key` |
 | `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept in the database. Losing it loses access to the sub-organization |
 | `DATABASE_URL` | Postgres connection string. Required — there is no default, so an install cannot silently come up against the wrong database |
-| `DATA_DIR` | The mounted directory, holding only `api-key-pair.plaintext.json`; defaults to `/data` |
+| `DATA_DIR` | The directory holding only `api-key-pair.plaintext.json`; defaults to `/data`. Both compose stacks pin it to `/data` in `environment:`, which outranks `env_file`, so a host-relative value in your `.env` (for `npm run dev`) cannot follow the service into a container — where it would resolve against `/app` and fail to write, since the service runs as a non-root user |
 | `POSTGRESQL_*` | Read by the compose `postgres` service only. The service itself uses `DATABASE_URL` |
-| `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only |
+| `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only. See the note on `localhost` below |
+| `RELAYER_BASE_URL` | Where meta-transactions are submitted. Same `localhost` note |
 | `RELAYER_BUILDER_API_KEY` | Sent as `X-Builder-Api-Private-Key`, paired with `X-Builder-Address` naming the wallet being acted for; the app-level `X-API-Key` is the DPM platform's own credential and is never sent from here. It also identifies a builder-owned install to `dpm-api` |
 | `DPM_LP_API_KEY` | Set instead on a liquidity-provider install, which has no builder secret |
 | `CONTRACT_*` | What a `GET /contract-info` call would return, supplied as config to remove that outbound dependency |
@@ -301,12 +346,34 @@ command above rather than passing vacuously.
 ## Deployment
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.prod.yml up -d --wait --build
 ```
 
-This brings up Postgres, waits for it to accept connections, then builds and starts the service —
-which migrates before it listens. The image is a multi-stage Alpine build running as a non-root
-user, with no native addons to compile and dev dependencies pruned before the runtime stage.
+This brings up Postgres, waits for it to accept connections, runs the `migrate` service to
+completion, and only then starts the service; `--wait` holds until everything reports healthy.
+The image is a multi-stage Alpine build running as a non-root user, with no native addons to
+compile and dev dependencies pruned before the runtime stage.
+
+The production stack carries its own compose project name, so it never collides with the dev one
+on a machine running both. It restarts `always` rather than `unless-stopped`, refuses to start on
+a default database password, does not publish the Postgres port at all, and binds the service to
+`127.0.0.1` — put a TLS-terminating reverse proxy in front, since the API key travels over plain
+HTTP. Against a managed database, drop the `postgres` service, point `DATABASE_URL` at it, and
+remove the `depends_on` entry naming it.
+
+Locally, `docker compose up -d --wait` gives you the same shape from `Dockerfile.dev`.
+
+The published port and the health probe both follow `PORT` from `.env`, so changing it there is
+enough — there is no second place to keep in step.
+
+**`localhost` in a container is the container.** With `dpm-api` and `relayer-api` running on your
+own machine, `http://localhost:8086` from inside the service reaches nothing — the symptom is a
+connection refused that looks like the dependency being down. The dev stack maps
+`host.docker.internal` to the host gateway and rewrites both URLs to it, so `.env` can keep the
+`localhost` values that host-side `npm run dev` needs. Those two `environment:` entries always
+outrank `.env`; to send the container somewhere else — a shared staging deployment — set
+`DPM_API_BASE_URL_DOCKER` or `RELAYER_BASE_URL_DOCKER` instead of editing `.env`. The production
+stack does none of this: there, `.env` carries real hostnames and is used as written.
 
 Postgres is the one stateful piece. The `/data` volume holds only `api-key-pair.plaintext.json`,
 and the app container itself is disposable — the single-writer constraint that used to cap this

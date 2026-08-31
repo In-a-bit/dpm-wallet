@@ -1,0 +1,98 @@
+# PRODUCTION stack. Run it explicitly:
+#
+#     docker compose -f docker-compose.prod.yml up -d --wait
+#
+# It has its own project name, so it never collides with the dev stack's containers or volumes on
+# a machine that runs both. The difference from docker-compose.yml is confined to the build: no
+# named context, no sibling checkout, no link — Dockerfile.prod installs @inabit-com/dpm-sdk from
+# the registry at DPM_SDK_VERSION, so this file builds from a clean clone with nothing beside it.
+#
+# Postgres is included so the stack stands up on its own. Against a managed database instead,
+# delete the `postgres` service, point DATABASE_URL at it, and drop the `depends_on` entry that
+# names it — `migrate` and `dpm-wallet` need nothing else from it.
+name: dpm-wallet-prod
+
+# One image, two services: `migrate` applies the schema and exits, then `dpm-wallet` serves
+# against it. Sharing the tag is what keeps them honest — the migrations that ran are exactly the
+# ones the running code was compiled with.
+x-dpm-wallet-image: &dpm-wallet-image
+  build:
+    context: .
+    dockerfile: Dockerfile.prod
+    args:
+      # Pin the published SDK release this deployment is built against. Overriding it here rather
+      # than editing the Dockerfile keeps the version visible in the deployment description.
+      DPM_SDK_VERSION: ${DPM_SDK_VERSION:-0.2.0-beta.10}
+  image: dpm-wallet:${IMAGE_TAG:-latest}
+  env_file: .env
+  environment:
+    # The mounted volume, overriding whatever .env sets for host-side `npm run dev` —
+    # a relative path resolves against /app in here, which the service user cannot write.
+    DATA_DIR: /data
+    DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    # No `:-` fallbacks and no published port, unlike the dev stack: a production database does
+    # not get to start on a default password, and nothing outside the compose network needs to
+    # reach it. Reach it for maintenance with `docker compose … exec postgres psql`.
+    environment:
+      POSTGRES_USER: ${POSTGRESQL_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD}
+      POSTGRES_DB: ${POSTGRESQL_DB:-dpm_wallet}
+    volumes:
+      # Mounted at /var/lib/postgresql, not the /var/lib/postgresql/data of older images: 18+
+      # stores data in a major-version subdirectory of it, and refuses to start when it finds
+      # a volume mounted over the inner path instead.
+      - postgres-data:/var/lib/postgresql
+    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRESQL_USER:-postgres} -d ${POSTGRESQL_DB:-dpm_wallet}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # One-shot: runs the pending migrations, then exits 0. Every `up` runs it — TypeORM skips
+  # what the migrations table already records — and a failure leaves it exited non-zero, which
+  # is what holds dpm-wallet back rather than letting it start against a stale schema.
+  # Run it alone with `docker compose -f docker-compose.prod.yml run --rm migrate`.
+  migrate:
+    <<: *dpm-wallet-image
+    command: ["node", "dist/db/migrate-cli"]
+    depends_on:
+      postgres:
+        # A database that accepts connections, not one that has merely been created.
+        condition: service_healthy
+    # A migration that fails should stay failed and be looked at, not be retried in a loop.
+    restart: "no"
+
+  dpm-wallet:
+    <<: *dpm-wallet-image
+    # Follows PORT from .env rather than hardcoding it, so the published port and the port the
+    # service binds cannot drift apart. Bind to the loopback interface and let a reverse proxy in
+    # front terminate TLS: this service authenticates with an API key over plaintext HTTP.
+    ports: ["127.0.0.1:${PORT:-8090}:${PORT:-8090}"]
+    # The image's CMD migrates before starting; here the migrate service has already done it,
+    # so the container goes straight to serving.
+    command: ["node", "dist/main"]
+    # The one file left on the volume: the plaintext api-key-pair.plaintext.json backup
+    # (see src/vault/api-key-pair-plaintext-backup.ts). Every table lives in Postgres.
+    volumes: ["dpm-wallet-data:/data"]
+    depends_on:
+      # Implies a healthy postgres — migrate cannot have succeeded without one.
+      migrate:
+        condition: service_completed_successfully
+    restart: always
+    # Let in-flight signing finish.
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:${PORT:-8090}/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  # Survive `down`; destroyed only by `down -v`.
+  postgres-data:
+  dpm-wallet-data:
