@@ -1,6 +1,7 @@
 # DEVELOPMENT stack — the default, so a bare `docker compose up` is the local one. Production is
-# docker-compose.prod.yml, which builds Dockerfile.prod and has none of the sibling-checkout
-# machinery below.
+# docker-compose.prod.yml. Both build the same `Dockerfile`; they differ only in how the stack is
+# operated — published ports, defaulted passwords, image tags — so what runs in production is what
+# was tested here.
 #
 # The image is built once and used by two services: `migrate` applies the schema and exits,
 # then `dpm-wallet` serves against it. Sharing the tag is what keeps them honest — the
@@ -8,30 +9,60 @@
 x-dpm-wallet-image: &dpm-wallet-image
   build:
     context: .
-    dockerfile: Dockerfile.dev
-    # @inabit-com/dpm-sdk is a `file:../dpm-sdk` dependency living outside this context. It is
-    # handed to the build as a named context the Dockerfile's `sdk` stage copies from, so the
-    # sibling checkout is compiled into the image instead of breaking `npm ci`.
-    additional_contexts:
-      dpm-sdk: ../dpm-sdk
+    dockerfile: Dockerfile
   image: dpm-wallet:dev
-  env_file: .env
+  # Which env file, so one checkout can run more than one install. A dpm-wallet is bound to a
+  # single builder — `POST /v1/vault/init` mints one Turnkey sub-organization for whichever builder
+  # its RELAYER_BUILDER_API_KEY names — so a second builder genuinely needs a second install, not a
+  # second database.
+  #
+  #   ENV_FILE=.env.segregated docker compose -p dpm-wallet-segregated --env-file .env.segregated up -d
+  #
+  # `--env-file` supplies the port interpolation below; ENV_FILE supplies the service's own
+  # variables. Both are needed, and pointing them at different files is the one way to get this
+  # wrong.
+  env_file: ${ENV_FILE:-.env}
   # Reached over the compose network rather than through the published port, so the host
   # mapping below is only for psql and the TypeORM CLI from a workstation.
   # `localhost` in a container is the container. dpm-api and relayer-api run on the developer's
   # machine, so they are reached through the host gateway; on Linux that name does not exist
   # unless it is mapped here.
+  # ── DNS ──────────────────────────────────────────────────────────────────────
+  # No `dns:` here, deliberately, and it is worth knowing why both ways round.
+  #
+  # Docker copies the host's /etc/resolv.conf into a container **once, at creation**, and never
+  # updates it. So a container created on one network keeps that network's resolver, and once the
+  # machine moves every lookup fails with "bad address" — which surfaces three services away as
+  # `Turnkey ... failed: fetch failed` and reads like a Turnkey outage.
+  #
+  # The obvious fix, pinning 1.1.1.1 / 8.8.8.8, is worse: plenty of networks block outbound DNS to
+  # public resolvers and force you through the local one. On such a network a pinned resolver
+  # answers nothing at all, and a resolver list whose first entry is unreachable stalls on every
+  # lookup waiting for it to time out.
+  #
+  # So: inherit the host's resolvers, which are by definition the ones that work here — and after
+  # changing networks, recreate rather than restart:
+  #
+  #   docker compose up -d --force-recreate
+  #
+  # `restart` keeps the stale file; only a new container gets a new one.
   extra_hosts:
     - "host.docker.internal:host-gateway"
   environment:
+    # api.turnkey.com publishes both A and AAAA records and a Docker bridge network has no IPv6
+    # route, so the AAAA is always a dead end. Node's happy-eyeballs does recover on its own —
+    # this is not what fixes anything — it just skips an attempt that can only ever time out.
+    NODE_OPTIONS: --dns-result-order=ipv4first
     # The mounted volume, overriding whatever .env sets for host-side `npm run dev` —
     # a relative path resolves against /app in here, which the service user cannot write.
     DATA_DIR: /data
     # Same split as DATA_DIR: .env keeps the `localhost` URLs that host-side `npm run dev` needs,
     # and the container gets the gateway equivalents. These two lines *always* win over .env, so
     # pointing the container somewhere else — a shared staging deployment, say — means setting
-    # DPM_API_BASE_URL_DOCKER / RELAYER_BASE_URL_DOCKER rather than editing .env.
+    # DPM_API_BASE_URL_DOCKER / GAMMA_API_URL_DOCKER / RELAYER_BASE_URL_DOCKER rather than
+    # editing .env.
     DPM_API_BASE_URL: ${DPM_API_BASE_URL_DOCKER:-http://host.docker.internal:8086}
+    GAMMA_API_URL: ${GAMMA_API_URL_DOCKER:-http://host.docker.internal:8084}
     RELAYER_BASE_URL: ${RELAYER_BASE_URL_DOCKER:-http://host.docker.internal:8085}
     DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:-postgres}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
 

@@ -14,9 +14,10 @@ import { createTestDatabase, type TestDatabase } from "./pg-test-db";
 import { VaultStateRepository } from "../db/repositories/vault-state.repo";
 import { WalletRepository } from "../db/repositories/wallet.repo";
 import { AuditLog } from "../observability/audit";
-import { CONFIG, DB, DPM_API, SIGNER_PROVIDER, SIGNING_SDK } from "../tokens";
+import { CONFIG, DB, DPM_API, GAMMA_API, SIGNER_PROVIDER, SIGNING_SDK } from "../tokens";
 import { TurnkeyKeyVault } from "../vault/turnkey-vault";
 import { FakeDpmApi } from "./fake-dpm-api";
+import { FakeGammaApi } from "./fake-gamma-api";
 import { FakeSignerProvider } from "./fake-signer-provider";
 import { FakeSigningSdk } from "./fake-signing-sdk";
 import { TEST_API_KEY, testEnv } from "./env";
@@ -37,6 +38,7 @@ export type Harness = {
   app: INestApplication;
   provider: FakeSignerProvider;
   dpmApi: FakeDpmApi;
+  gammaApi: FakeGammaApi;
   /** Resolved out of the container, so a test asserts against the instance the app is using. */
   vaultState: VaultStateRepository;
   wallets: WalletRepository;
@@ -72,6 +74,7 @@ export async function startHarness(
   const { TEST_MNEMONIC: mnemonic, ...env } = overrides;
   const provider = new FakeSignerProvider(mnemonic);
   const dpmApi = options.dpmApi ?? new FakeDpmApi();
+  const gammaApi = new FakeGammaApi();
   const ownedDatabase = env.DATABASE_URL ? undefined : await createTestDatabase();
 
   const moduleRef = await Test.createTestingModule({ imports: [AppModule] })
@@ -85,6 +88,8 @@ export async function startHarness(
     .useValue(provider)
     .overrideProvider(DPM_API)
     .useValue(dpmApi)
+    .overrideProvider(GAMMA_API)
+    .useValue(gammaApi)
     .overrideProvider(SIGNING_SDK)
     .useFactory({
       factory: (vault: TurnkeyKeyVault, config: Config) => new FakeSigningSdk(vault, config),
@@ -118,6 +123,7 @@ export async function startHarness(
     app,
     provider,
     dpmApi,
+    gammaApi,
     vaultState: app.get(VaultStateRepository),
     wallets: app.get(WalletRepository),
     audit: app.get(AuditLog),

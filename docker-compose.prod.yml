@@ -3,9 +3,9 @@
 #     docker compose -f docker-compose.prod.yml up -d --wait
 #
 # It has its own project name, so it never collides with the dev stack's containers or volumes on
-# a machine that runs both. The difference from docker-compose.yml is confined to the build: no
-# named context, no sibling checkout, no link — Dockerfile.prod installs @inabit-com/dpm-sdk from
-# the registry at DPM_SDK_VERSION, so this file builds from a clean clone with nothing beside it.
+# a machine that runs both. It builds the same `Dockerfile` as the dev stack and differs only in
+# how that image is operated — no published database port, no defaulted password, an image tag
+# rather than a fixed `:dev`.
 #
 # Postgres is included so the stack stands up on its own. Against a managed database instead,
 # delete the `postgres` service, point DATABASE_URL at it, and drop the `depends_on` entry that
@@ -18,11 +18,7 @@ name: dpm-wallet-prod
 x-dpm-wallet-image: &dpm-wallet-image
   build:
     context: .
-    dockerfile: Dockerfile.prod
-    args:
-      # Pin the published SDK release this deployment is built against. Overriding it here rather
-      # than editing the Dockerfile keeps the version visible in the deployment description.
-      DPM_SDK_VERSION: ${DPM_SDK_VERSION:-0.2.0-beta.10}
+    dockerfile: Dockerfile
   image: dpm-wallet:${IMAGE_TAG:-latest}
   env_file: .env
   environment:

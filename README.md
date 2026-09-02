@@ -34,48 +34,52 @@ Default listen port: **8090**. Then initialise the vault once:
 curl -XPOST localhost:8090/v1/vault/init -H 'X-API-Key: <DPM_WALLET_API_KEY>'
 ```
 
-`@inabit-com/dpm-sdk` is a `file:../dpm-sdk` dependency — the sibling checkout of
-`git@github.com:In-a-bit/dpm-sdk.git`, linked rather than installed from a registry, so a change
-there is picked up by a rebuild instead of a publish. This service imports only its `/turnkey`
-entry point, which carries the signing and encoding primitives and no browser wallet code.
+`@inabit-com/dpm-sdk` is an ordinary registry dependency, pinned to an exact version in
+`package.json` — `git@github.com:In-a-bit/dpm-sdk.git` is where it is developed, but nothing here
+reads that checkout. This service imports only its `/turnkey` entry point, which carries the
+signing and encoding primitives and no browser wallet code.
 
-That link is a development convenience, and it is the only thing the dev and production images
-disagree about — hence two of each file:
+It used to be a `file:../dpm-sdk` link to a sibling checkout. That is gone: a build no longer
+needs anything beside this repo, and picking up an SDK change now means publishing a release and
+bumping the pin rather than rebuilding against whatever is on disk.
 
-| | Dockerfile | Compose | `@inabit-com/dpm-sdk` comes from |
-|---|---|---|---|
-| Development | `Dockerfile.dev` | `docker-compose.yml` (the default) | the sibling checkout, compiled from source |
-| Production | `Dockerfile.prod` | `docker-compose.prod.yml` | the npm registry, pinned to `DPM_SDK_VERSION` |
+It is installed with `npm ci` from the committed lockfile — there is no build arg and no second
+copy of the version anywhere. Moving to a new SDK release is a `package.json` +
+`package-lock.json` change, reviewed and committed like any other dependency bump.
 
-The sibling sits outside the Docker build context, so the **dev** image takes it as a BuildKit
-named context: compose declares it (`additional_contexts: {dpm-sdk: ../dpm-sdk}`) and the
-`sdk` stage compiles it before the service's own `npm ci` runs. Only the SDK's build inputs are
-copied in — never its `node_modules`, and never its `dist`, so the image ships what the
-checked-out source compiles to rather than whatever was last built locally. Building it by hand
-needs the same context passed explicitly:
+There is one `Dockerfile`, used by every environment, and it builds from a clean clone with
+nothing beside it:
 
 ```bash
-docker build -f Dockerfile.dev --build-context dpm-sdk=../dpm-sdk -t dpm-wallet:dev .
+docker build -t dpm-wallet:latest .
 ```
 
-The **production** image has none of that: no named context, no sibling, no symlink. It builds
-from a clean clone with nothing beside it, because its install replaces the `file:` specifier with
-the published package before anything else happens.
+There used to be two — `Dockerfile.dev` compiled the sibling checkout into the image, which is the
+only thing it ever did differently. With the SDK published, the two were identical and are now one
+file. The dev and production *stacks* still differ, but only in how they are operated (published
+ports, defaulted passwords, image tags), which lives in the two compose files:
 
-```bash
-docker build -f Dockerfile.prod --build-arg DPM_SDK_VERSION=0.2.0-beta.10 -t dpm-wallet:latest .
-```
+| | Compose | Operated as |
+|---|---|---|
+| Development | `docker-compose.yml` (the default) | published Postgres port, defaulted password, fixed `dpm-wallet:dev` tag |
+| Production | `docker-compose.prod.yml` | no published database port, password required, `IMAGE_TAG` |
 
-One wrinkle is worth knowing about before it bites: the sibling checkout declares the *same*
-version as the published package, so npm considers the existing `"link": true` lockfile node to
-already satisfy the pin and keeps it — the install then points at a path that does not exist in
-the image. Naming the package on the `npm install` command line, as `Dockerfile.prod` does, is
-what forces the registry tarball instead.
+Because both build the same file, what runs in production is what was tested locally.
 
-> **The production image cannot compile yet.** The published `0.2.0-beta.10` exposes `.`,
-> `./magic`, `./privy`, `./lp` and `./react` — there is no `./turnkey`, the entry point this
-> service imports. That entry exists only on the unpublished `dpm-wallet-adaptation` branch. Cut a
-> release of `dpm-sdk` that includes it, then build with `DPM_SDK_VERSION` set to that version.
+> **npm 11 or newer is required** (`engines.npm`), even though `.nvmrc` pins Node 22, which bundles
+> npm 10. The SDK's dependency tree contains two packages wanting incompatible `date-fns` ranges
+> (`@base-ui/react` wants `^4`, `@metamask/sdk` wants `^2.29`). npm 10 resolves that wrong — it
+> hoists 2.30 to the root and never places a 4.x, producing a lockfile its own `npm ci` rejects as
+> out of sync. npm 11 nests the second copy correctly. So regenerate the lockfile with
+> `npx npm@11 install`, never a bare `npm install` on Node 22's npm, or the next `npm ci` breaks.
+> The `Dockerfile` upgrades npm before installing for the same reason.
+
+One wrinkle is worth knowing about if the link is ever reintroduced locally: a sibling checkout
+declares the *same* version as the published package, so npm considers an existing `"link": true`
+lockfile node to already satisfy the pin and quietly keeps it — a plain `npm install` after
+editing `package.json` reports "up to date" and changes nothing. Naming the package on the command
+line (`npm install --save-exact @inabit-com/dpm-sdk@<version>`) is what forces the registry
+tarball instead.
 
 ## API
 
@@ -361,7 +365,7 @@ a default database password, does not publish the Postgres port at all, and bind
 HTTP. Against a managed database, drop the `postgres` service, point `DATABASE_URL` at it, and
 remove the `depends_on` entry naming it.
 
-Locally, `docker compose up -d --wait` gives you the same shape from `Dockerfile.dev`.
+Locally, `docker compose up -d --wait` gives you the same shape from the same `Dockerfile`.
 
 The published port and the health probe both follow `PORT` from `.env`, so changing it there is
 enough — there is no second place to keep in step.

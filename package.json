@@ -24,10 +24,11 @@
     "test:e2e": "jest --config ./test/jest-e2e.json"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22",
+    "npm": ">=11"
   },
   "dependencies": {
-    "@inabit-com/dpm-sdk": "file:../dpm-sdk",
+    "@inabit-com/dpm-sdk": "0.2.0-beta.12",
     "@nestjs/common": "^11.2.1",
     "@nestjs/core": "^11.2.1",
     "@nestjs/platform-express": "^11.2.1",

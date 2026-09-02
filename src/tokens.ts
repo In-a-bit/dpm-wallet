@@ -10,6 +10,7 @@ export const TRANSACTION = "TRANSACTION";
 export const ENCRYPTION_KEY = "ENCRYPTION_KEY";
 export const SIGNER_PROVIDER = "SIGNER_PROVIDER";
 export const DPM_API = "DPM_API";
+export const GAMMA_API = "GAMMA_API";
 export const KEY_VAULT = "KEY_VAULT";
 export const SIGNING_SDK = "SIGNING_SDK";
 

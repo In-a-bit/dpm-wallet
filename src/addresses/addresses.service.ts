@@ -2,13 +2,14 @@ import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/turnkey";
 import { Inject, Injectable } from "@nestjs/common";
 import type { Address, Hex } from "viem";
 
+import type { CustodyUserRegistrar } from "../clients/gamma-api.client";
 import type { Config } from "../config";
 import { deriveProxyAddress } from "../crypto/proxy-address";
 import { WalletRepository, type Wallet, type WalletPage } from "../db/repositories/wallet.repo";
-import { addressNotFound, refAlreadyExists } from "../errors";
+import { addressNotFound, dpmRegistrationRejected, refAlreadyExists } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
-import { CONFIG, KEY_VAULT } from "../tokens";
+import { CONFIG, GAMMA_API, KEY_VAULT } from "../tokens";
 import type { KeyVault } from "../vault/key-vault.interface";
 
 /** The pair the DPM registration call takes: the EOA and its proof of control. */
@@ -35,6 +36,7 @@ export class AddressesService {
     private readonly audit: AuditLog,
     @Inject(KEY_VAULT) private readonly vault: KeyVault,
     @Inject(CONFIG) private readonly config: Config,
+    @Inject(GAMMA_API) private readonly gammaApi: CustodyUserRegistrar,
   ) {}
 
   create(ref: string): Promise<Wallet> {
@@ -73,6 +75,47 @@ export class AddressesService {
    * signing depends on it: `GET /relay-payload` resolves the RelayHub nonce from the DPM
    * `users` table, so an unregistered EOA cannot yield one.
    */
+  /**
+   * Registers the address with the DPM platform and records the flag, in one call.
+   *
+   * The three steps an operator used to perform by hand — sign the attestation, post it to
+   * gamma-api, set the flag — collapse here because only the middle one ever needed a human,
+   * and it does not: this install already holds the builder credential that authorises it.
+   */
+  async dpmRegister(ref: string): Promise<Wallet> {
+    const wallet = await this.get(ref);
+    // Provisioning retries land here, and the flag is the whole outcome: once it is set there
+    // is nothing left to ask the platform for.
+    if (wallet.dpmRegistered) return wallet;
+
+    const { signature } = await this.signDpmAttestation(ref);
+    const user = await this.gammaApi.registerCustodyUser({
+      address: wallet.eoaAddress,
+      signature,
+    });
+
+    // gamma-api derives the proxy from its own factory and implementation addresses. If it
+    // disagrees with ours the two services are configured against different factories, and the
+    // address the platform just onboarded is not one this vault will ever sign for.
+    if (user.proxyWallet.toLowerCase() !== wallet.proxyAddress.toLowerCase()) {
+      throw dpmRegistrationRejected(
+        "gamma-api derived a different proxy wallet for this address; the two services are " +
+          "configured against different proxy factories",
+        { ref, address: wallet.eoaAddress, ours: wallet.proxyAddress, theirs: user.proxyWallet },
+      );
+    }
+
+    const registered = await this.wallets.markDpmRegistered(ref, true);
+    if (!registered) throw addressNotFound(ref);
+    await this.audit.record({
+      ref,
+      action: AuditAction.AddressDpmRegister,
+      outcome: "success",
+      detail: { address: wallet.eoaAddress, proxyWallet: user.proxyWallet },
+    });
+    return registered;
+  }
+
   async setDpmRegistered(ref: string, registered: boolean): Promise<Wallet> {
     const wallet = await this.wallets.markDpmRegistered(ref, registered);
     if (!wallet) throw addressNotFound(ref);

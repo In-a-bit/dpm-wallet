@@ -11,6 +11,9 @@ export const ERROR_STATUS = {
   ADDRESS_NOT_FOUND: 404,
   REF_ALREADY_EXISTS: 409,
   CUSTOMER_NOT_REGISTERED: 409,
+  // Distinct from RELAYER_REQUEST_FAILED so the caller can tell a platform that refused from
+  // one that was unreachable: the first will refuse again, and must not be retried in a loop.
+  DPM_REGISTRATION_REJECTED: 409,
   RELAYER_REQUEST_FAILED: 502,
   SIGNING_FAILED: 500,
   IDEMPOTENCY_CONFLICT: 409,
@@ -86,6 +89,18 @@ export function refAlreadyExists(ref: string): DpmwError {
   return new DpmwError("REF_ALREADY_EXISTS", `An address already exists for ref "${ref}"`, {
     details: { ref },
   });
+}
+
+/**
+ * The DPM platform refused the registration, or agreed to it on terms this install cannot
+ * honour. Either way retrying changes nothing until an operator intervenes, which is what
+ * separates it from an unreachable platform.
+ */
+export function dpmRegistrationRejected(
+  message: string,
+  details: Record<string, unknown>,
+): DpmwError {
+  return new DpmwError("DPM_REGISTRATION_REJECTED", message, { details });
 }
 
 export function customerNotRegistered(ref: string): DpmwError {

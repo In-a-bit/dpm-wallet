@@ -59,6 +59,18 @@ export class AddressesController {
   }
 
   /**
+   * Signs the attestation, registers the address with dpm-api, and records the flag.
+   *
+   * The manual three-step path below stays for a caller that needs the pieces separately;
+   * this is the one an operator wants, and the one wallet provisioning drives automatically.
+   */
+  @Post(":ref/dpm-register")
+  @HttpCode(HttpStatus.OK)
+  async dpmRegister(@Param("ref", RefPipe) ref: string): Promise<AddressResponseDto> {
+    return toAddressResponse(await this.addresses.dpmRegister(ref));
+  }
+
+  /**
    * Not in the original spec, which describes `wallets.dpm_registered` without giving the
    * operator a way to set it. Meta-transaction signing gates on the flag, so the gateway
    * needs this call after the DPM platform confirms registration.

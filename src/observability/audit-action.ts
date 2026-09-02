@@ -7,6 +7,7 @@ export const AuditAction = {
   VaultInit: "vault.init",
   AddressCreate: "address.create",
   AddressDpmAttestation: "address.dpm_attestation",
+  AddressDpmRegister: "address.dpm_register",
   AddressDpmRegistered: "address.dpm_registered",
   SignOrder: "sign.order",
   SignCancel: "sign.cancel",

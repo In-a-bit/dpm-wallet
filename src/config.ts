@@ -59,6 +59,18 @@ export type Config = {
     /** Set instead on a liquidity-provider install, which has no builder secret. */
     lpApiKey: string | undefined;
   };
+  /**
+   * gamma-api, which is a different service from dpm-api above and reached on its own port.
+   * Custody onboarding lives here, behind two gates: the app key satisfies the global one,
+   * the builder secret the custody group. Sending only one is a 401.
+   */
+  gammaApi: {
+    baseUrl: string;
+    /** The app-level X-API-Key every gamma-api route requires. */
+    appApiKey: string;
+    /** Sent as X-Builder-Api-Private-Key; identifies which builder owns the address. */
+    builderApiKey: string;
+  };
   relayer: {
     baseUrl: string;
     /** Sent as X-Builder-Api-Private-Key; never the app-level X-API-Key. */
@@ -90,6 +102,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       baseUrl: trimSlash(required("DPM_API_BASE_URL", env.DPM_API_BASE_URL)),
       builderApiKey: required("RELAYER_BUILDER_API_KEY", env.RELAYER_BUILDER_API_KEY),
       lpApiKey: optional(env.DPM_LP_API_KEY),
+    },
+    gammaApi: {
+      baseUrl: trimSlash(required("GAMMA_API_URL", env.GAMMA_API_URL)),
+      appApiKey: required("APP_API_KEY", env.APP_API_KEY),
+      builderApiKey: required("RELAYER_BUILDER_API_KEY", env.RELAYER_BUILDER_API_KEY),
     },
     relayer: {
       baseUrl: trimSlash(required("RELAYER_BASE_URL", env.RELAYER_BASE_URL)),
