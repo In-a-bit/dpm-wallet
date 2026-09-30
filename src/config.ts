@@ -61,13 +61,16 @@ export type Config = {
   };
   /**
    * gamma-api, which is a different service from dpm-api above and reached on its own port.
-   * Custody onboarding lives here, behind two gates: the app key satisfies the global one,
-   * the builder secret the custody group. Sending only one is a 401.
+   * Custody onboarding lives here. The builder secret gets through both of its gates: the global
+   * one (which also takes the app key) and the custody group's.
    */
   gammaApi: {
     baseUrl: string;
-    /** The app-level X-API-Key every gamma-api route requires. */
-    appApiKey: string;
+    /**
+     * The platform-wide X-API-Key. Only needed against a gamma-api whose global gate predates
+     * accepting the builder secret; sent when set, and nothing requires it any more.
+     */
+    appApiKey: string | undefined;
     /** Sent as X-Builder-Api-Private-Key; identifies which builder owns the address. */
     builderApiKey: string;
   };
@@ -105,7 +108,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     gammaApi: {
       baseUrl: trimSlash(required("GAMMA_API_URL", env.GAMMA_API_URL)),
-      appApiKey: required("APP_API_KEY", env.APP_API_KEY),
+      appApiKey: optional(env.APP_API_KEY),
       builderApiKey: required("RELAYER_BUILDER_API_KEY", env.RELAYER_BUILDER_API_KEY),
     },
     relayer: {

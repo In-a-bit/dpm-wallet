@@ -11,10 +11,9 @@ const SIGNATURE = `0x${"ab".repeat(65)}` as const;
 type Recorded = { path: string; headers: NodeJS.Dict<string | string[]>; body: string };
 
 /**
- * gamma-api guards custody onboarding twice over: an app-level key on every route, and the
- * builder secret on the custody group specifically. Sending one without the other is a 401
- * that says only "unauthorized", so the pairing is worth pinning here rather than discovering
- * it against a running platform.
+ * gamma-api guards custody onboarding twice over: a global gate on every route, and the builder
+ * secret on the custody group. The builder secret satisfies both; the platform-wide app key is
+ * only for a gamma-api whose global gate predates that, so it is sent only when configured.
  */
 describe("GammaApiClient.registerCustodyUser", () => {
   let server: Server;
@@ -49,8 +48,8 @@ describe("GammaApiClient.registerCustodyUser", () => {
     };
   });
 
-  const client = (): GammaApiClient =>
-    new GammaApiClient({ baseUrl, appApiKey: "app_key_test", builderApiKey: "bld_sk_test" });
+  const client = (appApiKey?: string): GammaApiClient =>
+    new GammaApiClient({ baseUrl, appApiKey, builderApiKey: "bld_sk_test" });
 
   it("posts the attestation to custody onboarding and decodes the user", async () => {
     const user = await client().registerCustodyUser({ address: ADDRESS, signature: SIGNATURE });
@@ -63,11 +62,18 @@ describe("GammaApiClient.registerCustodyUser", () => {
     });
   });
 
-  // Two gates, two headers. The app key alone gets past the global middleware and is then
-  // refused by the custody group; the builder key alone never gets past the global one. Both
-  // failures look identical from outside, which is what makes sending only one worth a test.
-  it("presents both the app key and the builder secret", async () => {
+  // A new install holds no platform-wide credential at all: the builder secret is the whole
+  // of its identity, and sending an empty X-API-Key would only muddy the gate's logs.
+  it("presents only the builder secret when no app key is configured", async () => {
     await client().registerCustodyUser({ address: ADDRESS, signature: SIGNATURE });
+
+    expect(requests.at(-1)?.headers["x-builder-api-private-key"]).toBe("bld_sk_test");
+    expect(requests.at(-1)?.headers["x-api-key"]).toBeUndefined();
+  });
+
+  // An install configured before gamma-api accepted the builder secret keeps working.
+  it("adds the app key when one is configured", async () => {
+    await client("app_key_test").registerCustodyUser({ address: ADDRESS, signature: SIGNATURE });
 
     expect(requests.at(-1)?.headers["x-api-key"]).toBe("app_key_test");
     expect(requests.at(-1)?.headers["x-builder-api-private-key"]).toBe("bld_sk_test");

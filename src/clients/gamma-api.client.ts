@@ -4,7 +4,7 @@ import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
 
-/** The app-level key every gamma-api route is behind, custody onboarding included. */
+/** The platform-wide key gamma-api's global gate also accepts; see `Config["gammaApi"]`. */
 export const APP_API_KEY_HEADER = "X-API-Key";
 
 /** The pair gamma-api's custody onboarding takes: the EOA, and its proof of control. */
@@ -37,6 +37,19 @@ export interface CustodyUserRegistrar {
 export class GammaApiClient implements CustodyUserRegistrar {
   constructor(private readonly config: Config["gammaApi"]) {}
 
+  /**
+   * The builder secret passes both of gamma-api's gates, global and custody. The app key is added
+   * only when configured, for a gamma-api whose global gate does not yet take the builder secret.
+   */
+  private headers(): Record<string, string> {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      [BUILDER_API_PRIVATE_KEY_HEADER]: this.config.builderApiKey,
+    };
+    if (this.config.appApiKey) headers[APP_API_KEY_HEADER] = this.config.appApiKey;
+    return headers;
+  }
+
   async registerCustodyUser(registration: CustodyRegistration): Promise<CustodyUser> {
     const path = "/custody/users";
     const url = `${this.config.baseUrl}${path}`;
@@ -45,13 +58,7 @@ export class GammaApiClient implements CustodyUserRegistrar {
     try {
       response = await fetch(url, {
         method: "POST",
-        // Both, always: the app key satisfies the global middleware and the builder secret the
-        // custody group. Either one alone is a 401 whose body says only "unauthorized".
-        headers: {
-          "Content-Type": "application/json",
-          [APP_API_KEY_HEADER]: this.config.appApiKey,
-          [BUILDER_API_PRIVATE_KEY_HEADER]: this.config.builderApiKey,
-        },
+        headers: this.headers(),
         body: JSON.stringify({
           address: registration.address,
           signature: registration.signature,
