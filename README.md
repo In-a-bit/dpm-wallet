@@ -401,7 +401,10 @@ the implementation, so each decision is recorded here instead; the wording it re
    publishable key safe to ship to a browser and cannot authenticate a backend. The platform
    gained a private-key credential (`builder_api_private_keys`) for this caller, and both
    `relayer-api` `POST /submit` and `clob-api` `POST /order` pair that key with
-   `X-Builder-Address` so a builder can only act for the addresses it registered.
+   `X-Builder-Address` so a builder can only act for the addresses it registered. Without the
+   app key the platform accepts it only where this service and its owner need it: dpm-api's
+   wallet routes, gamma-api `POST /custody/users`, and relayer-api (bound to the builder's own
+   addresses). clob-api wants the app key as well, which the builder's backend holds.
 3. **No treasury endpoints and no raw transaction signing.** The spec has `rebalance` and
    `external-withdraw`, both of which exist to move value out of a privileged central wallet.
    There is no such wallet here, and a managed EOA is a signing key that holds nothing, so there

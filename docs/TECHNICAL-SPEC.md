@@ -78,7 +78,7 @@ These were settled with the product owner and are treated as fixed for this spec
 | 8   | **Phase 1 is Turnkey-only.** The self-custody (mnemonic) vault is deferred behind the same `KeyVault` interface.                                                                                                                               |
 | 9   | The `dpmw` is **balance-agnostic**: no balance reads, no chain monitoring, no validation. It signs agnostically.                                                                                                                               |
 | 10  | The **operational wallet is not a** `dpmw` **concept.** It is a Plaee shared-balance concern; to the `dpmw` it is just another user wallet.                                                                                                    |
-| 11  | Outbound calls to `relayer-api` authenticate with `X-Builder-Api-Key` only. The app-level `X-API-Key` is Plaee's own proxy credential and is never used by the `dpmw`.                                                                         |
+| 11  | Outbound calls to `relayer-api` authenticate with `X-Builder-Api-Private-Key` only. The app-level `X-API-Key` is Plaee's own proxy credential and is never used by the `dpmw`.                                                                         |
 
 
 ---
@@ -114,7 +114,7 @@ The container is designed to have **near-zero egress to Plaee**. Everything the 
 
 Trust boundary: the DPM Wallet's only outbound Plaee dependency is the read-only relay-payload call
 
-`GET /relay-payload` is registered above `relayer-api`'s authenticated route group, so it needs neither a JWT nor the `poly_*` builder HMAC. The `dpmw` authenticates it with the operator's **builder key** in the `X-Builder-Api-Key` header — and nothing else. The app-level `X-API-Key` (`APP_API_KEY`) is **not** used: that credential belongs to Plaee's own proxy callers, and the `dpmw` neither holds nor sends it. The header is supplied by injecting a `fetchImpl` into the SDK's `getRelayPayload` (see [Section 7.4](#74-injecting-x-builder-api-key-without-an-sdk-change)).
+`GET /relay-payload` needs neither a JWT nor the `poly_*` builder HMAC. A caller that sends the builder secret without the app key must name the wallet in `X-Builder-Address`; that address must be one of the builder's users and equal the `?address=` it asks about, or relayer-api answers 401/403. The `dpmw` authenticates it with the operator's **builder key** in the `X-Builder-Api-Private-Key` header — and nothing else. The app-level `X-API-Key` (`APP_API_KEY`) is **not** used: that credential belongs to Plaee's own proxy callers, and the `dpmw` neither holds nor sends it. The header is supplied by injecting a `fetchImpl` into the SDK's `getRelayPayload` (see [Section 7.4](#74-injecting-x-builder-api-key-without-an-sdk-change)).
 
 ---
 
@@ -289,16 +289,16 @@ Add and export a **pure** `buildOrderTypedData(order, chainId, exchangeAddress, 
 
 Change `"Polymarket CTF Exchange"` to `"DPM CTF Exchange"` (line 238 above), ideally exposed as a parameter/config value rather than a literal so both the SDK and the `dpmw` read it from one place. Until this lands, an order signed by `dpm-sdk` and an order signed by the `dpmw` produce **different digests** for identical inputs — one of them will be rejected by the exchange. The `dpmw` keeps the name in config with `"DPM CTF Exchange"` as the default and runs a **startup self-check** (see [Section 9.2](#92-order-eip-712-worked-example-and-self-check)).
 
-### 7.4 Injecting `X-Builder-Api-Key` without an SDK change
+### 7.4 Injecting `X-Builder-Api-Private-Key` without an SDK change
 
-Calls from the `dpmw` to `relayer-api` carry the operator's **builder key** in `X-Builder-Api-Key` — the credential `relayer-api` resolves through `builderauth` — and nothing else. The app-level `X-API-Key` is Plaee's own proxy credential; the `dpmw` neither holds nor sends it.
+Calls from the `dpmw` to `relayer-api` carry the operator's **builder key** in `X-Builder-Api-Private-Key` — the credential `relayer-api` resolves through `builderauth` — and nothing else. The app-level `X-API-Key` is Plaee's own proxy credential; the `dpmw` neither holds nor sends it.
 
 `RequestAuth` currently supports only `jwt`, `lp`, and `none`, but no SDK change is needed: `getRelayPayload` already accepts a `fetchImpl`, so the `dpmw` injects a fetch wrapper that adds the header.
 
 ```ts
 const builderKeyFetch: typeof fetch = (input, init = {}) => {
   const headers = new Headers(init.headers);
-  headers.set("X-Builder-Api-Key", config.relayerBuilderApiKey);
+  headers.set("X-Builder-Api-Private-Key", config.relayerBuilderApiKey);
   return fetch(input, { ...init, headers });
 };
 // passed as fetchImpl into buildUsdcCtfAllowanceTx(...) etc.
@@ -369,7 +369,7 @@ res.json(body); // operator POSTs this to relayer-api /submit
 
 - **Call:** `GET /relay-payload?address=<eoa>&type=PROXY`
 - **Returns:** `{ address: <relayerAdminAddress>, nonce: <string> }`
-- **Auth:** `X-Builder-Api-Key` only — the operator's builder key. The app-level `X-API-Key` is not sent (it is Plaee's proxy credential), and no JWT or `poly_`* HMAC is involved.
+- **Auth:** `X-Builder-Api-Private-Key` only — the operator's builder key. The app-level `X-API-Key` is not sent (it is Plaee's proxy credential), and no JWT or `poly_`* HMAC is involved.
 - **Constraint:** `type` must be `PROXY`; `SAFE` is rejected by the endpoint.
 - **Precondition:** the EOA must already be registered in the DPM `users` table, because the nonce is resolved from it (see [Section 11](#11-onboarding-sequence)).
 
@@ -932,7 +932,7 @@ dpm-wallet/
 │   │       └── turnkey.provider.ts
 │   ├── sdk/
 │   │   ├── vault-wallet-adapter.ts  # InternalWalletPort bridge
-│   │   ├── builder-key-fetch.ts     # fetchImpl injecting X-Builder-Api-Key
+│   │   ├── builder-key-fetch.ts     # fetchImpl injecting X-Builder-Api-Private-Key
 │   │   └── wiring.ts                # picks SDK build functions
 │   ├── db/
 │   │   ├── client.ts            # TypeORM DataSource over the pg pool
@@ -1004,7 +1004,7 @@ All configuration is via environment variables, parsed and validated at boot (mi
 | `TURNKEY_API_PRIVATE_KEY` | yes           | —                   | Turnkey API private key.                                                                |
 | `TURNKEY_ORGANIZATION_ID` | yes           | —                   | Turnkey organisation/sub-org id.                                                        |
 | `RELAYER_BASE_URL`        | yes           | —                   | Base URL of `relayer-api` (for `/relay-payload`).                                       |
-| `RELAYER_BUILDER_API_KEY` | yes           | —                   | Builder key sent as `X-Builder-Api-Key` to `relayer-api`. No app `X-API-Key` is used.   |
+| `RELAYER_BUILDER_API_KEY` | yes           | —                   | Builder key sent as `X-Builder-Api-Private-Key` to `relayer-api`. No app `X-API-Key` is used.   |
 | `CHAIN_ID`                | yes           | `137`               | Polygon mainnet. Used for EIP-712 domain and tx serialisation only — there is no RPC.   |
 | `EXCHANGE_DOMAIN_NAME`    | yes           | `DPM CTF Exchange`  | EIP-712 order domain name; self-checked at boot.                                        |
 | `CONTRACT_COLLATERAL`     | yes           | —                   | USDC address.                                                                           |
@@ -1172,7 +1172,7 @@ Restore is the reverse: stop the container, place the file at `DATABASE_PATH` on
 ## 18. Open items for implementation
 
 - Confirm the Turnkey signing API surface for EIP-712 typed data vs raw payloads, and map it onto `SignerProvider.signRawPayload`.
-- Pin `GET /relay-payload` authentication with a contract test: the deployed `relayer-api` must accept a bare `X-Builder-Api-Key` on that route, with no app `X-API-Key` present. The global API-key gate in front of the route group has to admit builder keys for this to hold.
+- Pin `GET /relay-payload` authentication with a contract test: the deployed `relayer-api` must accept `X-Builder-Api-Private-Key` plus `X-Builder-Address` (one of the builder's own wallets) on that route, with no app `X-API-Key` present. relayer-api admits the builder key without the app key on all its routes but binds it to the builder's own addresses; only `GET /contract-info` takes the key alone.
 - Confirm the exact `SubmitTransactionRequest` field set accepted by the deployed `relayer-api` matches the SDK's `SubmitTransactionRequest` type (they align today; pin it with a contract test).
 - Decide whether `EXCHANGE_DOMAIN_NAME` becomes an SDK parameter (preferred) or stays a `dpmw`-side override until the SDK change lands.
 - Decide whether externally custodied addresses should later be representable through the `SignerProvider` seam (e.g. a Fireblocks provider that assembles and signs on their behalf). v1 supports vault-managed addresses only.
