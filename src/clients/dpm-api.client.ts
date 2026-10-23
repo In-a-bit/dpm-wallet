@@ -1,10 +1,7 @@
 import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { logInfo } from "../observability/log";
-import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
-
-/** The header a liquidity-provider install authenticates with instead of a builder secret. */
-export const LP_API_KEY_HEADER = "X-LP-Api-Key";
+import { platformIdentityHeaders } from "./platform-identity";
 
 export type CreateSubOrganizationRequest = {
   /** The compressed P-256 public key this install generated. */
@@ -61,7 +58,7 @@ export class DpmApiClient implements SubOrganizationCreator {
     try {
       response = await fetch(url, {
         method: "POST",
-        headers: { "Content-Type": "application/json", ...this.identityHeader() },
+        headers: { "Content-Type": "application/json", ...platformIdentityHeaders(this.config) },
         body: JSON.stringify(body),
       });
     } catch (cause) {
@@ -74,16 +71,6 @@ export class DpmApiClient implements SubOrganizationCreator {
       );
     }
     return response;
-  }
-
-  /**
-   * Which owner this install belongs to is decided entirely by which credential it holds:
-   * an LP key when one is configured, otherwise the builder secret it already uses for the
-   * relayer. dpm-api attributes the sub-organisation to whoever the key resolves to.
-   */
-  private identityHeader(): Record<string, string> {
-    if (this.config.lpApiKey) return { [LP_API_KEY_HEADER]: this.config.lpApiKey };
-    return { [BUILDER_API_PRIVATE_KEY_HEADER]: this.config.builderApiKey };
   }
 }
 

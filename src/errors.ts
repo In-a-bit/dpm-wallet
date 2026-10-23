@@ -15,6 +15,8 @@ export const ERROR_STATUS = {
   // one that was unreachable: the first will refuse again, and must not be retried in a loop.
   DPM_REGISTRATION_REJECTED: 409,
   RELAYER_REQUEST_FAILED: 502,
+  // data-api is not configured for this install, so there is nothing to retry until it is.
+  BALANCES_UNAVAILABLE: 503,
   SIGNING_FAILED: 500,
   IDEMPOTENCY_CONFLICT: 409,
   INTERNAL_ERROR: 500,

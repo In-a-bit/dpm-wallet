@@ -3,6 +3,7 @@ import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 
 import { AddressesModule } from "./addresses/addresses.module";
 import { AuditModule } from "./audit/audit.module";
+import { BalancesModule } from "./balances/balances.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { ApiKeyGuard } from "./common/guards/api-key.guard";
 import { IdempotencyInterceptor } from "./common/interceptors/idempotency.interceptor";
@@ -33,6 +34,7 @@ import { VaultModule } from "./vault/vault.module";
     SignModule,
     MetaTxModule,
     AuditModule,
+    BalancesModule,
   ],
   providers: [
     StartupService,

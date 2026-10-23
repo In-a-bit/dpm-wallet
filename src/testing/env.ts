@@ -27,6 +27,7 @@ const BASE_ENV: Record<string, string> = {
   DPM_API_BASE_URL: "https://dpm-api.test",
   GAMMA_API_URL: "https://gamma-api.test",
   APP_API_KEY: "app-api-key-test",
+  DATA_API_URL: "https://data-api.test",
   RELAYER_BASE_URL: "https://relayer.test",
   RELAYER_BUILDER_API_KEY: "bld_sk_test",
   CHAIN_ID: "137",

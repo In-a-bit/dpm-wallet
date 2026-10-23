@@ -74,6 +74,10 @@ export type Config = {
     /** Sent as X-Builder-Api-Private-Key; identifies which builder owns the address. */
     builderApiKey: string;
   };
+  /** data-api, where balances are indexed. Unset leaves `POST /v1/balances` answering 503. */
+  dataApi: {
+    baseUrl: string | undefined;
+  };
   relayer: {
     baseUrl: string;
     /** Sent as X-Builder-Api-Private-Key; never the app-level X-API-Key. */
@@ -110,6 +114,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       baseUrl: trimSlash(required("GAMMA_API_URL", env.GAMMA_API_URL)),
       appApiKey: optional(env.APP_API_KEY),
       builderApiKey: required("RELAYER_BUILDER_API_KEY", env.RELAYER_BUILDER_API_KEY),
+    },
+    dataApi: {
+      baseUrl: optional(optional(env.DATA_API_URL)?.replace(/\/$/, "")),
     },
     relayer: {
       baseUrl: trimSlash(required("RELAYER_BASE_URL", env.RELAYER_BASE_URL)),
