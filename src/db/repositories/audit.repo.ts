@@ -1,6 +1,7 @@
 import { Inject, Injectable } from "@nestjs/common";
 import {
   Between,
+  LessThan,
   LessThanOrEqual,
   MoreThanOrEqual,
   type FindOperator,
@@ -71,11 +72,16 @@ export type AuditQuery = {
   to?: string;
   limit: number;
   offset: number;
+  /** Keyset mode: only rows with a smaller id. Ignores `offset` and skips the count. */
+  beforeId?: number;
 };
 
 export type AuditPage = {
   events: AuditEvent[];
-  total: number;
+  /** Absent in keyset mode, where counting every matching row would defeat the point. */
+  total?: number;
+  /** Id of the last event when more rows follow, otherwise null. */
+  nextId: number | null;
 };
 
 @Injectable()
@@ -97,13 +103,34 @@ export class AuditRepository {
   }
 
   async query(query: AuditQuery): Promise<AuditPage> {
+    if (query.beforeId !== undefined) return this.queryAfterCursor(query, query.beforeId);
+
     const [rows, total] = await this.events.findAndCount({
       where: buildWhere(query),
       order: { id: "DESC" },
       take: query.limit,
       skip: query.offset,
     });
-    return { events: rows.map(toAuditEvent), total };
+    const more = query.offset + rows.length < total;
+    return {
+      events: rows.map(toAuditEvent),
+      total,
+      nextId: more ? (rows.at(-1)?.id ?? null) : null,
+    };
+  }
+
+  /** One extra row tells whether another page exists without a second query. */
+  private async queryAfterCursor(query: AuditQuery, beforeId: number): Promise<AuditPage> {
+    const rows = await this.events.find({
+      where: { ...buildWhere(query), id: LessThan(beforeId) },
+      order: { id: "DESC" },
+      take: query.limit + 1,
+    });
+    const page = rows.slice(0, query.limit);
+    return {
+      events: page.map(toAuditEvent),
+      nextId: rows.length > query.limit ? (page.at(-1)?.id ?? null) : null,
+    };
   }
 
   /** Deletes one batch of routine success rows older than `before`; returns how many went. */
