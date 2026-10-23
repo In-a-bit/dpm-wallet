@@ -93,6 +93,16 @@ export function IsIsoTimestamp(options?: ValidationOptions) {
   );
 }
 
+/** An ISO timestamp (checked separately) no newer than `minAgeMs` ago. */
+export function IsAtLeastAgo(minAgeMs: number, message: string, options?: ValidationOptions) {
+  return customValidator(
+    "isAtLeastAgo",
+    (value) => typeof value === "string" && Date.parse(value) <= Date.now() - minAgeMs,
+    message,
+    options,
+  );
+}
+
 /**
  * A page size or offset arriving as a query string.
  *

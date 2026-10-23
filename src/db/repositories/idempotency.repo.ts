@@ -5,6 +5,9 @@ import { DB } from "../../tokens";
 import type { Db } from "../client";
 import { IdempotencyKeyEntity } from "../entities";
 
+/** Idempotency records older than this are purged; the retry window is much shorter. */
+export const IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
+
 export type IdempotencyRecord = {
   requestHash: string;
   responseJson: string;

@@ -11,9 +11,11 @@ import { createValidationPipe } from "./common/validation/validation-pipe";
 import { AppConfigModule } from "./config.module";
 import { DatabaseModule } from "./database.module";
 import { HealthModule } from "./health/health.module";
+import { MaintenanceModule } from "./maintenance/maintenance.module";
 import { MetaTxModule } from "./meta-tx/meta-tx.module";
 import { ObservabilityModule } from "./observability/observability.module";
 import { RelayModule } from "./relay/relay.module";
+import { RetentionModule } from "./retention/retention.module";
 import { SignModule } from "./sign/sign.module";
 import { StartupService } from "./startup/startup.service";
 import { VaultModule } from "./vault/vault.module";
@@ -37,6 +39,8 @@ import { VaultModule } from "./vault/vault.module";
     AuditModule,
     BalancesModule,
     RelayModule,
+    MaintenanceModule,
+    RetentionModule,
   ],
   providers: [
     StartupService,

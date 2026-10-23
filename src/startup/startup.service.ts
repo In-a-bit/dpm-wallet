@@ -1,15 +1,15 @@
 import { Inject, Injectable, type OnApplicationBootstrap } from "@nestjs/common";
 
 import type { Db } from "../db/client";
-import { IdempotencyRepository } from "../db/repositories/idempotency.repo";
+import {
+  IDEMPOTENCY_RETENTION_MS,
+  IdempotencyRepository,
+} from "../db/repositories/idempotency.repo";
 import { logInfo } from "../observability/log";
 import { DB } from "../tokens";
 import { VaultService } from "../vault/vault.service";
 import { assertSchemaPresent } from "./schema-check";
 import { assertExchangeDomain } from "./self-check";
-
-/** Idempotency records older than this are purged at boot; the retry window is much shorter. */
-const IDEMPOTENCY_RETENTION_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Rebuilds the working state from the volume before the HTTP server binds. Nest runs this

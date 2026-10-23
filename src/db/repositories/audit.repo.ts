@@ -11,6 +11,39 @@ import {
 import { DB } from "../../tokens";
 import type { Db, Executor } from "../client";
 import { AuditEventEntity } from "../entities";
+import { AuditAction } from "../../observability/audit-action";
+
+/**
+ * The one definition of routine: a successful run of one of these actions. Everything else
+ * (vault, address, withdraw, any failure) is an important record that only an operator-confirmed
+ * archive may delete. Purge and export both build on this, so they can never disagree.
+ */
+export const ROUTINE_AUDIT_ACTIONS: readonly string[] = [
+  AuditAction.SignOrder,
+  AuditAction.SignCancel,
+  AuditAction.MetaAllowance,
+  AuditAction.MetaRedeem,
+  AuditAction.MetaSplit,
+  AuditAction.MetaMerge,
+];
+
+const ROUTINE_SQL = "(action = ANY($1) AND outcome = 'success')";
+
+export type ArchiveScope = {
+  before: string;
+  maxId: number;
+};
+
+export type AuditExportQuery = ArchiveScope & {
+  /** Exclusive: only rows with a greater id. */
+  afterId?: number;
+  limit: number;
+};
+
+export type AuditScope = {
+  maxId: number;
+  rows: number;
+};
 
 export type AuditOutcome = "success" | "failure";
 
@@ -71,6 +104,63 @@ export class AuditRepository {
       skip: query.offset,
     });
     return { events: rows.map(toAuditEvent), total };
+  }
+
+  /** Deletes one batch of routine success rows older than `before`; returns how many went. */
+  async purgeRoutine(before: string, batch: number): Promise<number> {
+    return this.deleteBatch(ROUTINE_SQL, [before, batch], "created_at < $2", "$3");
+  }
+
+  /** Important rows (not routine success) inside the archive scope, by ascending id. */
+  async exportImportant(query: AuditExportQuery): Promise<AuditEvent[]> {
+    const rows = await this.events
+      .createQueryBuilder("e")
+      .where("NOT (e.action IN (:...routine) AND e.outcome = 'success')", {
+        routine: ROUTINE_AUDIT_ACTIONS,
+      })
+      .andWhere("e.createdAt < :before AND e.id <= :maxId", query)
+      .andWhere("e.id > :afterId", { afterId: query.afterId ?? 0 })
+      .orderBy("e.id", "ASC")
+      .limit(query.limit)
+      .getMany();
+    return rows.map(toAuditEvent);
+  }
+
+  /** Deletes one batch of exactly the rows `exportImportant` would return. */
+  async deleteArchived(scope: ArchiveScope, batch: number): Promise<number> {
+    return this.deleteBatch(
+      `NOT ${ROUTINE_SQL}`,
+      [scope.before, scope.maxId, batch],
+      "created_at < $2 AND id <= $3",
+      "$4",
+    );
+  }
+
+  /** What an archive would cover right now; rows inserted later have a greater id. */
+  async importantScope(before: string): Promise<AuditScope> {
+    const [row] = await this.db.query<{ max_id: string; rows: string }[]>(
+      `SELECT COALESCE(MAX(id), 0) AS max_id, COUNT(*) AS rows FROM audit_events
+       WHERE NOT ${ROUTINE_SQL} AND created_at < $2`,
+      [ROUTINE_AUDIT_ACTIONS, before],
+    );
+    return { maxId: Number(row?.max_id ?? 0), rows: Number(row?.rows ?? 0) };
+  }
+
+  private async deleteBatch(
+    predicate: string,
+    rest: unknown[],
+    bounds: string,
+    limitParam: string,
+  ): Promise<number> {
+    const [row] = await this.db.query<{ n: number }[]>(
+      `WITH d AS (
+         DELETE FROM audit_events WHERE id IN (
+           SELECT id FROM audit_events WHERE ${predicate} AND ${bounds} ORDER BY id LIMIT ${limitParam}
+         ) RETURNING 1
+       ) SELECT COUNT(*)::int AS n FROM d`,
+      [ROUTINE_AUDIT_ACTIONS, ...rest],
+    );
+    return row?.n ?? 0;
   }
 }
 
