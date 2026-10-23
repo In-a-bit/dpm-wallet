@@ -8,6 +8,17 @@ import { DB } from "../tokens";
 import { TurnkeyKeyVault } from "../vault/turnkey-vault";
 import type { VaultHealth } from "../vault/key-vault.interface";
 
+/** A probe must answer inside the healthcheck timeout even when the database hangs. */
+const READY_TIMEOUT_MS = 3000;
+
+function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error("readiness query timed out")), ms);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * `/v1/health` is deliberately public, matching the prediction-gateway convention: an
  * orchestrator's probe should not need a credential.
@@ -35,7 +46,7 @@ export class HealthController {
   @Get("ready")
   async ready(@Res({ passthrough: true }) res: Response): Promise<{ status: string }> {
     try {
-      await this.db.query("SELECT 1");
+      await withTimeout(this.db.query("SELECT 1"), READY_TIMEOUT_MS);
       return { status: "ok" };
     } catch {
       res.status(503);
