@@ -30,10 +30,13 @@ once no version an operator may roll back to still reads it.
 
 Date: 2026-10-23. Node v22.23.2. Throwaway database on the local test Postgres, dropped afterwards.
 
-1. Migrated a fresh database with the `ops-hardening` build (commit 08eb80c) plus a temporary, uncommitted
-   migration `ALTER TABLE "wallets" ADD COLUMN "skew_temp" text NULL`. Result: 2 migrations recorded, `wallets.skew_temp` present.
+1. Migrated a fresh database with the `ops-hardening` build (commit 18b22dc) plus a temporary,
+   uncommitted migration `ALTER TABLE "wallets" ADD COLUMN "skew_temp" text NULL`. Result:
+   2 migrations recorded, `wallets.skew_temp` present. (This branch adds no migration of its own.)
 2. Ran `node dist/db/migrate-cli.js` built from `main` (commit 531b37e) against it. Result: exit 0,
    `db.migrated` with `applied: 0`. TypeORM ignores executed migrations it has no class for.
-3. Started `node dist/main.js` built from `main` against it. Result: startup passed (`startup.self_check_passed`, then `listening`) with the upstream URLs unreachable; it ran until stopped.
+3. Started `node dist/main.js` built from `main` against it. Result: startup passed
+   (`startup.self_check_passed`, then `listening`, `GET /v1/health` 200) with the upstream URLs
+   unreachable; it ran until stopped.
 
 So a rollback to `main` needs no restore for an additive release.
