@@ -74,6 +74,28 @@ describe("/v1/relay", () => {
     expect(upstream).not.toHaveBeenCalled();
   });
 
+  it("submits to the relayer once and replays the response for a repeated Idempotency-Key", async () => {
+    const first = await harness.post("/v1/relay", { body: request, idempotencyKey: "k1:relay" });
+    const second = await harness.post("/v1/relay", { body: request, idempotencyKey: "k1:relay" });
+
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(second.body).toEqual(first.body);
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers IDEMPOTENCY_CONFLICT when the key is reused with a different body", async () => {
+    await harness.post("/v1/relay", { body: request, idempotencyKey: "k1:relay" });
+    const other = await harness.post("/v1/relay", {
+      body: { ...request, nonce: "8" },
+      idempotencyKey: "k1:relay",
+    });
+
+    expect(other.status).toBe(409);
+    expect(other.body.error.code).toBe("IDEMPOTENCY_CONFLICT");
+    expect(upstream).toHaveBeenCalledTimes(1);
+  });
+
   it("reports a transaction's state", async () => {
     upstream.mockResolvedValue(
       new Response(JSON.stringify([{ transactionID: "tx-1", state: "STATE_CONFIRMED" }]), {
