@@ -83,12 +83,12 @@ tarball instead.
 
 ## API
 
-Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, except `GET /v1/health`.
+Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, except `GET /v1/health` and `GET /v1/health/ready`.
 `POST` routes accept an optional `Idempotency-Key`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/health` | Liveness; the only unauthenticated route |
+| `GET` | `/v1/health` | Liveness; unauthenticated |
 | `POST` | `/v1/vault/init` | First-run Turnkey sub-organization setup; idempotent |
 | `GET` | `/v1/vault/status` | Vault mode and sub-organization name |
 | `POST` | `/v1/addresses` | Mint a wallet at the next free index |
@@ -104,6 +104,21 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 | `POST` | `/v1/meta-tx/merge` | Merge outcome tokens back to collateral |
 | `POST` | `/v1/meta-tx/withdraw` | Withdraw collateral from the proxy |
 | `GET` | `/v1/audit` | Query the audit trail |
+| `GET` | `/v1/health/ready` | Readiness: the database answers; unauthenticated |
+| `POST` | `/v1/maintenance/purge-routine-audit` | Delete routine audit rows before a cutoff (driven by the manager) |
+| `GET` | `/v1/maintenance/audit-scope` | Fix an archive's id ceiling over the important audit rows |
+| `GET` | `/v1/maintenance/audit-export` | Page the important audit rows of an archive |
+| `POST` | `/v1/maintenance/delete-archived-audit` | Delete the important audit rows of a downloaded archive |
+
+### Maintenance endpoints
+
+`/v1/maintenance/*` exist for dpm-wallet-manager's retention and archive; this service never
+picks a cutoff itself. They act on the **whole** `audit_events` table, whatever `ref` (and so
+whatever manager prefix) a row belongs to. So retention and archive need exactly **one manager
+per dpm-wallet**: two managers sharing one dpm-wallet would trim and archive each other's rows.
+And a dpm-wallet with no manager in front of it never trims its routine audit rows (successful
+signing and meta transactions); they stay until something calls these endpoints. Only its
+idempotency keys are cleaned up on its own.
 
 ### Errors
 
