@@ -17,18 +17,28 @@ export class RelayerApiClient {
 
   /** Returns the relayer's body unchanged: `{transactionID, transactionHash?, state}`. */
   async submit(request: SubmitTransactionRequest): Promise<Record<string, unknown>> {
-    const response = await this.call("/submit", request.from, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(request),
-    });
+    const response = await this.call(
+      "/submit",
+      request.from,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(request),
+      },
+      { refusalIsRejection: true },
+    );
     return this.parse(response, "/submit") as Promise<Record<string, unknown>>;
   }
 
   /** The relayer answers with an array; an empty one, like a 404, means it knows no such id. */
   async transaction(id: string, actingAddress: string): Promise<Record<string, unknown>> {
     const path = `/transaction?id=${encodeURIComponent(id)}`;
-    const response = await this.call(path, actingAddress, { method: "GET" }, true);
+    const response = await this.call(
+      path,
+      actingAddress,
+      { method: "GET" },
+      { notFoundIsTransaction: true },
+    );
     const rows = await this.parse(response, "/transaction");
     if (!Array.isArray(rows) || rows.length === 0) throw transactionNotFound(id);
     return rows[0] as Record<string, unknown>;
@@ -38,7 +48,7 @@ export class RelayerApiClient {
     path: string,
     actingAddress: string,
     init: { method: string; headers?: Record<string, string>; body?: string },
-    notFoundIsTransaction = false,
+    { notFoundIsTransaction = false, refusalIsRejection = false } = {},
   ): Promise<Response> {
     const route = path.split("?")[0];
     let response: Response;
@@ -54,6 +64,14 @@ export class RelayerApiClient {
     }
     if (notFoundIsTransaction && response.status === 404) {
       throw transactionNotFound(new URL(path, "http://x").searchParams.get("id") ?? "");
+    }
+    if (refusalIsRejection && response.status >= 400 && response.status < 500) {
+      // The relayer looked at the body and said no (bad nonce, signature, balance...). Resending
+      // it unchanged gets the same answer, so this must not read as an outage to retry.
+      throw new DpmwError(
+        "RELAY_REJECTED",
+        `relayer-api ${route} refused the transaction with ${response.status}: ${await errorText(response)}`,
+      );
     }
     if (!response.ok) {
       throw new DpmwError(

@@ -121,6 +121,7 @@ distinct situations.
 | `CUSTOMER_NOT_REGISTERED` | 409 | The EOA is not in the DPM `users` table yet — retry after registering |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same `Idempotency-Key` replayed with a different body |
 | `RELAYER_REQUEST_FAILED` | 502 | `GET /relay-payload` did not succeed; the cause is upstream and unknown here |
+| `RELAY_REJECTED` | 422 | The relayer refused a `POST /v1/relay` submission (4xx); resending it unchanged is refused again |
 | `SIGNING_FAILED` | 500 | The custody backend refused or errored |
 | `INTERNAL_ERROR` | 500 | Unexpected; the underlying message is withheld |
 

@@ -52,15 +52,39 @@ describe("RelayerApiClient", () => {
       expect(headers["X-Builder-Api-Private-Key"]).toBeUndefined();
     });
 
-    it("reports a refusing relayer as RELAYER_REQUEST_FAILED", async () => {
+    it("reports a relayer that refuses the submission (4xx) as RELAY_REJECTED", async () => {
       fetchMock.mockResolvedValue(new Response("bad nonce", { status: 400 }));
 
       const failure = await client()
         .submit(REQUEST)
         .catch((err: unknown) => err);
 
-      expect((failure as DpmwError).code).toBe("RELAYER_REQUEST_FAILED");
+      expect((failure as DpmwError).code).toBe("RELAY_REJECTED");
+      expect((failure as DpmwError).status).toBe(422);
       expect((failure as DpmwError).message).toContain("bad nonce");
+    });
+
+    it("truncates the relayer's refusal message", async () => {
+      fetchMock.mockResolvedValue(new Response("x".repeat(500), { status: 422 }));
+
+      const failure = (await client()
+        .submit(REQUEST)
+        .catch((err: unknown) => err)) as DpmwError;
+
+      expect(failure.code).toBe("RELAY_REJECTED");
+      expect(failure.message).toContain("x".repeat(200));
+      expect(failure.message).not.toContain("x".repeat(201));
+    });
+
+    it("reports a failing relayer (5xx) as RELAYER_REQUEST_FAILED", async () => {
+      fetchMock.mockResolvedValue(new Response("boom", { status: 503 }));
+
+      const failure = await client()
+        .submit(REQUEST)
+        .catch((err: unknown) => err);
+
+      expect((failure as DpmwError).code).toBe("RELAYER_REQUEST_FAILED");
+      expect((failure as DpmwError).status).toBe(502);
     });
 
     it("reports an unreachable relayer as RELAYER_REQUEST_FAILED", async () => {
@@ -111,6 +135,16 @@ describe("RelayerApiClient", () => {
         .catch((err: unknown) => err);
 
       expect((failure as DpmwError).code).toBe("RELAY_TRANSACTION_NOT_FOUND");
+    });
+
+    it("reports a lookup 4xx other than 404 as RELAYER_REQUEST_FAILED, not RELAY_REJECTED", async () => {
+      fetchMock.mockResolvedValue(new Response("nope", { status: 400 }));
+
+      const failure = await client()
+        .transaction("tx-1", FROM)
+        .catch((err: unknown) => err);
+
+      expect((failure as DpmwError).code).toBe("RELAYER_REQUEST_FAILED");
     });
 
     it("reports any other refusal as RELAYER_REQUEST_FAILED", async () => {

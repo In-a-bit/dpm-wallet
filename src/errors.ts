@@ -15,6 +15,9 @@ export const ERROR_STATUS = {
   // one that was unreachable: the first will refuse again, and must not be retried in a loop.
   DPM_REGISTRATION_REJECTED: 409,
   RELAYER_REQUEST_FAILED: 502,
+  // The relayer answered a submission with a 4xx: it refused this body, and will refuse it
+  // again if it is resent unchanged. Unlike RELAYER_REQUEST_FAILED, this is not an outage.
+  RELAY_REJECTED: 422,
   // The relayer has no such transaction for this signer; retrying the lookup will not create one.
   RELAY_TRANSACTION_NOT_FOUND: 404,
   // data-api is not configured for this install, so there is nothing to retry until it is.
