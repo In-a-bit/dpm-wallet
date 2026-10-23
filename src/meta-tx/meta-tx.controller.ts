@@ -15,7 +15,8 @@ import { MetaTxService, type MetaTxArgs } from "./meta-tx.service";
 
 /**
  * Each endpoint returns a complete `SubmitTransactionRequest` the operator POSTs verbatim to
- * `relayer-api`. Submission is the operator's step, never this service's.
+ * `relayer-api`. Submission is the operator's step, never this service's;
+ * installs that submit through this service use `/relay`.
  */
 @ApiTags("meta-tx")
 @UseGuards(VaultInitializedGuard)

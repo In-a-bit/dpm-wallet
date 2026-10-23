@@ -12,6 +12,7 @@ export const SIGNER_PROVIDER = "SIGNER_PROVIDER";
 export const DPM_API = "DPM_API";
 export const GAMMA_API = "GAMMA_API";
 export const DATA_API = "DATA_API";
+export const RELAYER_API = "RELAYER_API";
 export const KEY_VAULT = "KEY_VAULT";
 export const SIGNING_SDK = "SIGNING_SDK";
 

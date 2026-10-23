@@ -15,6 +15,8 @@ export const ERROR_STATUS = {
   // one that was unreachable: the first will refuse again, and must not be retried in a loop.
   DPM_REGISTRATION_REJECTED: 409,
   RELAYER_REQUEST_FAILED: 502,
+  // The relayer has no such transaction for this signer; retrying the lookup will not create one.
+  RELAY_TRANSACTION_NOT_FOUND: 404,
   // data-api is not configured for this install, so there is nothing to retry until it is.
   BALANCES_UNAVAILABLE: 503,
   SIGNING_FAILED: 500,

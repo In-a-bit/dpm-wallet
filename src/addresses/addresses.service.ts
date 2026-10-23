@@ -6,7 +6,7 @@ import type { CustodyUserRegistrar } from "../clients/gamma-api.client";
 import type { Config } from "../config";
 import { deriveProxyAddress } from "../crypto/proxy-address";
 import { WalletRepository, type Wallet, type WalletPage } from "../db/repositories/wallet.repo";
-import { addressNotFound, dpmRegistrationRejected, refAlreadyExists } from "../errors";
+import { DpmwError, addressNotFound, dpmRegistrationRejected, refAlreadyExists } from "../errors";
 import { AuditAction } from "../observability/audit-action";
 import { AuditLog } from "../observability/audit";
 import { CONFIG, GAMMA_API, KEY_VAULT } from "../tokens";
@@ -46,6 +46,17 @@ export class AddressesService {
   async get(ref: string): Promise<Wallet> {
     const wallet = await this.wallets.findByRef(ref);
     if (!wallet) throw addressNotFound(ref);
+    return wallet;
+  }
+
+  /** Whether `address` is an EOA of this install; the relay endpoints refuse any other. */
+  async getByEoaAddress(address: string): Promise<Wallet> {
+    const wallet = await this.wallets.findByEoaAddress(address);
+    if (!wallet) {
+      throw new DpmwError("ADDRESS_NOT_FOUND", `No address ${address} in this install`, {
+        details: { address },
+      });
+    }
     return wallet;
   }
 

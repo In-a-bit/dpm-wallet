@@ -43,6 +43,15 @@ export class WalletRepository {
     return row ? toWallet(row) : undefined;
   }
 
+  /** Addresses are matched case-insensitively: callers hold them checksummed or lowercased. */
+  async findByEoaAddress(address: string): Promise<Wallet | undefined> {
+    const row = await this.wallets
+      .createQueryBuilder("w")
+      .where("lower(w.eoa_address) = lower(:address)", { address })
+      .getOne();
+    return row ? toWallet(row) : undefined;
+  }
+
   async list(limit: number, offset: number): Promise<WalletPage> {
     const [rows, total] = await this.wallets.findAndCount({
       order: { derivationIndex: "ASC" },

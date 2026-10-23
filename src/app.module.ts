@@ -13,6 +13,7 @@ import { DatabaseModule } from "./database.module";
 import { HealthModule } from "./health/health.module";
 import { MetaTxModule } from "./meta-tx/meta-tx.module";
 import { ObservabilityModule } from "./observability/observability.module";
+import { RelayModule } from "./relay/relay.module";
 import { SignModule } from "./sign/sign.module";
 import { StartupService } from "./startup/startup.service";
 import { VaultModule } from "./vault/vault.module";
@@ -35,6 +36,7 @@ import { VaultModule } from "./vault/vault.module";
     MetaTxModule,
     AuditModule,
     BalancesModule,
+    RelayModule,
   ],
   providers: [
     StartupService,
