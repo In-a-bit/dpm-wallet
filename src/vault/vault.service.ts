@@ -237,20 +237,29 @@ export class VaultService {
    * Failing the boot on it would let one badly-timed crash brick the service permanently.
    */
   private async assertVaultMatchesDbAddresses(): Promise<void> {
-    const managedAddressesFromDb = await this.wallets.allEoaAddresses();
     const heldByVault = new Set((await this.vault.listAddresses()).map(lower));
+    const untracked = new Set(heldByVault);
+    const missing: string[] = [];
 
-    const untracked = [...heldByVault].filter(
-      (address) => !managedAddressesFromDb.some((known) => lower(known) === address),
-    );
-    if (untracked.length > 0) {
+    // The directory is walked a page at a time, so the check never loads every row at once.
+    let afterIndex = -1;
+    for (;;) {
+      const page = await this.wallets.eoaAddressPage(afterIndex, ADDRESS_PAGE_SIZE);
+      if (page.addresses.length === 0) break;
+      for (const address of page.addresses) {
+        untracked.delete(lower(address));
+        if (!heldByVault.has(lower(address))) missing.push(address);
+      }
+      afterIndex = page.lastIndex;
+    }
+
+    if (untracked.size > 0) {
       logWarn("startup.vault_addresses_untracked", {
-        count: untracked.length,
-        firstAddress: untracked[0],
+        count: untracked.size,
+        firstAddress: [...untracked][0],
       });
     }
 
-    const missing = managedAddressesFromDb.filter((address) => !heldByVault.has(lower(address)));
     if (missing.length === 0) return;
 
     throw new DpmwError(
@@ -260,6 +269,8 @@ export class VaultService {
     );
   }
 }
+
+const ADDRESS_PAGE_SIZE = 500;
 
 function lower(address: string): string {
   return address.toLowerCase();

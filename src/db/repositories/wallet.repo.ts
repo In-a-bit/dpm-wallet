@@ -61,10 +61,25 @@ export class WalletRepository {
     return { wallets: rows.map(toWallet), total };
   }
 
-  /** Every EOA in the directory, for the boot-time reconciliation against the custody backend. */
-  async allEoaAddresses(): Promise<Address[]> {
-    const rows = await this.wallets.find({ select: { eoaAddress: true } });
-    return rows.map((row) => row.eoaAddress as Address);
+  /**
+   * One page of EOAs in derivation order, strictly after `afterIndex` (-1 to start). Keyset
+   * rather than offset, so the boot-time walk over the whole directory stays cheap at any size.
+   */
+  async eoaAddressPage(
+    afterIndex: number,
+    limit: number,
+  ): Promise<{ addresses: Address[]; lastIndex: number }> {
+    const rows = await this.wallets
+      .createQueryBuilder("w")
+      .select(["w.derivationIndex", "w.eoaAddress"])
+      .where("w.derivation_index > :afterIndex", { afterIndex })
+      .orderBy("w.derivation_index", "ASC")
+      .take(limit)
+      .getMany();
+    return {
+      addresses: rows.map((row) => row.eoaAddress as Address),
+      lastIndex: rows.at(-1)?.derivationIndex ?? afterIndex,
+    };
   }
 
   /**
