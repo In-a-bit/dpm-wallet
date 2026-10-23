@@ -39,5 +39,6 @@ describe("OpenAPI document", () => {
   it("clears the requirement on the public health route, matching the guard", () => {
     const document = buildApiDocument(harness.app);
     expect(document.paths["/v1/health"]?.get?.security).toEqual([]);
+    expect(document.paths["/v1/health/ready"]?.get?.security).toEqual([]);
   });
 });

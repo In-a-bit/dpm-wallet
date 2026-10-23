@@ -1,6 +1,8 @@
 import { LP_ATTESTATION_MESSAGE } from "@inabit-com/dpm-sdk/turnkey";
 import { recoverMessageAddress } from "viem";
+import type { Db } from "../src/db/client";
 import { startHarness, type Harness } from "../src/testing/harness";
+import { DB } from "../src/tokens";
 
 const CUSTOMER = "customer-12345";
 const MAKER = "0x1111111111111111111111111111111111111111";
@@ -31,6 +33,21 @@ describe("dpm-wallet HTTP API", () => {
       const response = await harness.get("/v1/health", { apiKey: null });
       expect(response.status).toBe(200);
       expect(response.body.status).toBe("ok");
+    });
+
+    it("serves readiness without a key, and 503 {status} when the database query throws", async () => {
+      const ok = await harness.get("/v1/health/ready", { apiKey: null });
+      expect(ok.status).toBe(200);
+      expect(ok.body).toEqual({ status: "ok" });
+
+      const spy = jest.spyOn(harness.app.get<Db>(DB), "query").mockRejectedValue(new Error("down"));
+      try {
+        const down = await harness.get("/v1/health/ready", { apiKey: null });
+        expect(down.status).toBe(503);
+        expect(down.body).toEqual({ status: "unavailable" });
+      } finally {
+        spy.mockRestore();
+      }
     });
 
     it("rejects a missing key", async () => {
