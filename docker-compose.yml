@@ -68,7 +68,7 @@ x-dpm-wallet-image: &dpm-wallet-image
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-trixie
     # The password has no default: copy `.env.example` to `.env` and set it. The port is
     # published on loopback only, so the database is not reachable from the LAN.
     environment:

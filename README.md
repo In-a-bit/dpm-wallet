@@ -28,6 +28,14 @@ npm run db:migrate              # apply the schema
 npm run dev
 ```
 
+The compose database is `postgres:18-trixie` (Debian, glibc). A `postgres-data` volume created by an
+earlier `postgres:18-alpine` stack still starts — the image's entrypoint re-owns the data directory
+from the alpine uid (70) to 999 — but its text indexes were built with musl's collation, so after the
+first start run `docker compose exec postgres psql -U postgres -d dpm_wallet -c 'REINDEX DATABASE dpm_wallet'`
+(the dev data is disposable, so `docker compose down -v` is the simpler way out). Rehearsed locally:
+data stayed readable and `REINDEX` succeeded; `ALTER DATABASE … REFRESH COLLATION VERSION` errored
+on that switch, so do not rely on it.
+
 Default listen port: **8090**. Then initialise the vault once:
 
 ```bash

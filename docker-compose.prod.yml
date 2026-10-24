@@ -29,7 +29,7 @@ x-dpm-wallet-image: &dpm-wallet-image
 
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-trixie
     # No `:-` fallbacks and no published port, unlike the dev stack: a production database does
     # not get to start on a default password, and nothing outside the compose network needs to
     # reach it. Reach it for maintenance with `docker compose … exec postgres psql`.
