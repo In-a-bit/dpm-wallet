@@ -66,9 +66,10 @@ services:
   dpm-wallet:
     <<: *dpm-wallet-image
     # Follows PORT from .env rather than hardcoding it, so the published port and the port the
-    # service binds cannot drift apart. Bind to the loopback interface and let a reverse proxy in
-    # front terminate TLS: this service authenticates with an API key over plaintext HTTP.
-    ports: ["127.0.0.1:${PORT:-8090}:${PORT:-8090}"]
+    # service binds cannot drift apart. Nothing is published on the host: a reverse proxy
+    # attached to this stack's network terminates TLS and reaches the service by name, because
+    # it authenticates with an API key over plaintext HTTP.
+    expose: ["${PORT:-8090}"]
     # The image's CMD migrates before starting; here the migrate service has already done it,
     # so the container goes straight to serving.
     command: ["node", "dist/main"]

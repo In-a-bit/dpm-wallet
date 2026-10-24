@@ -22,7 +22,7 @@ See `docs/TECHNICAL-SPEC.md` for the full design. Deviations from it are listed 
 
 ```bash
 npm install
-cp .env.example .env
+cp .env.example .env           # set POSTGRESQL_PASSWORD (and the passwords in the two URLs)
 docker compose up -d postgres   # the database; nothing runs without it
 npm run db:migrate              # apply the schema
 npm run dev
@@ -320,7 +320,7 @@ rather than failing later on a customer's first request.
 | `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept in the database. Losing it loses access to the sub-organization |
 | `DATABASE_URL` | Postgres connection string. Required — there is no default, so an install cannot silently come up against the wrong database |
 | `DATA_DIR` | Holds nothing now; boot only looks there for a legacy `api-key-pair.plaintext.json` to delete. Defaults to `/data`. Both compose stacks pin it to `/data` in `environment:`, which outranks `env_file`, so a host-relative value in your `.env` (for `npm run dev`) cannot follow the service into a container — where it would resolve against `/app` and fail to write, since the service runs as a non-root user |
-| `POSTGRESQL_*` | Read by the compose `postgres` service only. The service itself uses `DATABASE_URL` |
+| `POSTGRESQL_*` | Read by the compose `postgres` service only; the dev stack requires `POSTGRESQL_PASSWORD` and publishes its ports on `127.0.0.1` only. The service itself uses `DATABASE_URL` |
 | `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only. See the note on `localhost` below |
 | `RELAYER_BASE_URL` | Where meta-transactions are submitted. Same `localhost` note |
 | `RELAYER_BUILDER_API_KEY` | Sent as `X-Builder-Api-Private-Key`, paired with `X-Builder-Address` naming the wallet being acted for; the app-level `X-API-Key` is the DPM platform's own credential and is never sent from here. It also identifies a builder-owned install to `dpm-api` |
@@ -379,9 +379,9 @@ compile and dev dependencies pruned before the runtime stage.
 
 The production stack carries its own compose project name, so it never collides with the dev one
 on a machine running both. It restarts `always` rather than `unless-stopped`, refuses to start on
-a default database password, does not publish the Postgres port at all, and binds the service to
-`127.0.0.1` — put a TLS-terminating reverse proxy in front, since the API key travels over plain
-HTTP. Against a managed database, drop the `postgres` service, point `DATABASE_URL` at it, and
+a default database password, does not publish the Postgres port at all, and publishes nothing for the service either (it only
+`expose`s the port) — attach a TLS-terminating reverse proxy to the stack's network, since the API
+key travels over plain HTTP. Against a managed database, drop the `postgres` service, point `DATABASE_URL` at it, and
 remove the `depends_on` entry naming it.
 
 Locally, `docker compose up -d --wait` gives you the same shape from the same `Dockerfile`.

@@ -64,19 +64,19 @@ x-dpm-wallet-image: &dpm-wallet-image
     DPM_API_BASE_URL: ${DPM_API_BASE_URL_DOCKER:-http://host.docker.internal:8086}
     GAMMA_API_URL: ${GAMMA_API_URL_DOCKER:-http://host.docker.internal:8084}
     RELAYER_BASE_URL: ${RELAYER_BASE_URL_DOCKER:-http://host.docker.internal:8085}
-    DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:-postgres}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
+    DATABASE_URL: postgres://${POSTGRESQL_USER:-postgres}:${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD in .env}@postgres:5432/${POSTGRESQL_DB:-dpm_wallet}?sslmode=disable
 
 services:
   postgres:
     image: postgres:18-alpine
-    # Fallback defaults match `.env.example`, so a recreate without the .env loaded still
-    # binds the public port at 5440 and uses the canonical creds. An existing .env overrides.
+    # The password has no default: copy `.env.example` to `.env` and set it. The port is
+    # published on loopback only, so the database is not reachable from the LAN.
     environment:
       POSTGRES_USER: ${POSTGRESQL_USER:-postgres}
-      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRESQL_PASSWORD:?set POSTGRESQL_PASSWORD in .env}
       POSTGRES_DB: ${POSTGRESQL_DB:-dpm_wallet}
     ports:
-      - "${POSTGRESQL_PORT:-5440}:5432"
+      - "127.0.0.1:${POSTGRESQL_PORT:-5440}:5432"
     volumes:
       # Mounted at /var/lib/postgresql, not the /var/lib/postgresql/data of older images: 18+
       # stores data in a major-version subdirectory of it, and refuses to start when it finds
@@ -107,7 +107,8 @@ services:
     <<: *dpm-wallet-image
     # Follows PORT from .env rather than hardcoding it — the service binds what the config says,
     # and a mapping fixed at 8090 published a port nothing was listening on.
-    ports: ["${PORT:-8090}:${PORT:-8090}"]
+    # Loopback only: this service authenticates with an API key over plaintext HTTP.
+    ports: ["127.0.0.1:${PORT:-8090}:${PORT:-8090}"]
     # The image's CMD migrates before starting; here the migrate service has already done it,
     # so the container goes straight to serving.
     command: ["node", "dist/main"]
