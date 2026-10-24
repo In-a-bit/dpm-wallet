@@ -1,6 +1,6 @@
 import type { ProxyFactoryConfig } from "../crypto/proxy-address";
 
-export const TEST_API_KEY = "test-api-key";
+export const TEST_API_KEY = "test-api-key-0123456789abcdef0123456789";
 
 /**
  * The proxy factory the test environment derives against. Exported rather than inlined below

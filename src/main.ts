@@ -3,7 +3,7 @@ import "dotenv/config";
 import { NestFactory } from "@nestjs/core";
 import type { NestExpressApplication } from "@nestjs/platform-express";
 
-import { mountApiDocs } from "./api-docs";
+import { mountApiDocsIfEnabled } from "./api-docs";
 import { AppModule } from "./app.module";
 import { configureApp } from "./app.setup";
 import type { Config } from "./config";
@@ -16,10 +16,10 @@ async function bootstrap(): Promise<void> {
     bodyParser: false,
   });
   configureApp(app);
-  mountApiDocs(app);
   installShutdownHandlers(app);
 
   const config = app.get<Config>(CONFIG);
+  mountApiDocsIfEnabled(app, config);
   await app.listen(config.port);
   logInfo("listening", { port: config.port, vaultMode: config.vaultMode });
 }

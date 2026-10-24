@@ -61,7 +61,8 @@ describe("RelayerApiClient", () => {
 
       expect((failure as DpmwError).code).toBe("RELAY_REJECTED");
       expect((failure as DpmwError).status).toBe(422);
-      expect((failure as DpmwError).message).toContain("bad nonce");
+      expect((failure as DpmwError).message).not.toContain("bad nonce");
+      expect((failure as DpmwError).internal).toContain("bad nonce");
     });
 
     it("truncates the relayer's refusal message", async () => {
@@ -72,8 +73,9 @@ describe("RelayerApiClient", () => {
         .catch((err: unknown) => err)) as DpmwError;
 
       expect(failure.code).toBe("RELAY_REJECTED");
-      expect(failure.message).toContain("x".repeat(200));
-      expect(failure.message).not.toContain("x".repeat(201));
+      expect(failure.message).not.toContain("xx");
+      expect(failure.internal).toContain("x".repeat(200));
+      expect(failure.internal).not.toContain("x".repeat(201));
     });
 
     it("reports a failing relayer (5xx) as RELAYER_REQUEST_FAILED", async () => {

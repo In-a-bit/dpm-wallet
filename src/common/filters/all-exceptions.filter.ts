@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+
 import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter } from "@nestjs/common";
 import type { Request, Response } from "express";
 
@@ -23,9 +25,17 @@ export class AllExceptionsFilter implements ExceptionFilter {
     const http = host.switchToHttp();
     const request = http.getRequest<Request>();
     const response = http.getResponse<Response>();
-    const { status, body, code } = toResponse(exception);
+    const requestId =
+      exception instanceof DpmwError && exception.internal !== undefined ? randomUUID() : undefined;
+    const { status, body, code } = toResponse(exception, requestId);
 
-    const context = { method: request.method, path: request.path, code, err: exception };
+    const context = {
+      method: request.method,
+      path: request.path,
+      code,
+      err: exception,
+      ...(requestId ? { requestId, upstream: (exception as DpmwError).internal } : {}),
+    };
     if (status >= SERVER_ERROR_THRESHOLD) {
       logError("request.failed", context);
     } else {
@@ -36,9 +46,12 @@ export class AllExceptionsFilter implements ExceptionFilter {
   }
 }
 
-function toResponse(err: unknown): { status: number; body: unknown; code: string } {
+function toResponse(
+  err: unknown,
+  requestId?: string,
+): { status: number; body: unknown; code: string } {
   if (err instanceof DpmwError) {
-    return { status: err.status, body: err.toEnvelope(), code: err.code };
+    return { status: err.status, body: err.toEnvelope(requestId), code: err.code };
   }
   if (err instanceof HttpException) {
     return { status: err.getStatus(), body: err.getResponse(), code: err.name };

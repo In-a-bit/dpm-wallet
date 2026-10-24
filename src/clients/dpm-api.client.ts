@@ -69,7 +69,10 @@ export class DpmApiClient implements SubOrganizationCreator {
     if (!response.ok) {
       throw new DpmwError(
         "RELAYER_REQUEST_FAILED",
-        `dpm-api ${path} failed with ${response.status}: ${await errorText(response)}`,
+        `dpm-api ${path} failed with ${response.status}`,
+        {
+          internal: await errorText(response),
+        },
       );
     }
     return response;

@@ -35,3 +35,11 @@ export function buildApiDocument(app: INestApplication): OpenAPIObject {
 export function mountApiDocs(app: INestApplication): void {
   SwaggerModule.setup(`${BASE_PATH}/docs`, app, buildApiDocument(app));
 }
+
+/** The docs are an unauthenticated route, so they are served only when ENABLE_API_DOCS says so. */
+export function mountApiDocsIfEnabled(
+  app: INestApplication,
+  config: { enableApiDocs: boolean },
+): void {
+  if (config.enableApiDocs) mountApiDocs(app);
+}

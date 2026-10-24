@@ -36,8 +36,10 @@ export type Config = {
    */
   dataDir: string;
   vaultMode: VaultMode;
-  /** Inbound X-API-Key expected from the operator gateway. */
+  /** Inbound X-API-Key expected from the operator gateway. At least 32 characters, no placeholder. */
   apiKey: string;
+  /** Serves the OpenAPI document and Swagger UI at /v1/docs. Off unless ENABLE_API_DOCS=true. */
+  enableApiDocs: boolean;
   /**
    * AES key for the one secret kept on the volume, the Turnkey API private key. Losing it
    * loses access to the sub-organisation, so it belongs in the operator's secret store
@@ -108,7 +110,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       VAULT_MODES,
       "turnkey",
     ),
-    apiKey: required("DPM_WALLET_API_KEY", env.DPM_WALLET_API_KEY),
+    apiKey: parseApiKey(env.DPM_WALLET_API_KEY),
+    enableApiDocs: parseBoolean("ENABLE_API_DOCS", env.ENABLE_API_DOCS),
     encryptionKey: required("DPM_WALLET_ENCRYPTION_KEY", env.DPM_WALLET_ENCRYPTION_KEY),
     turnkey: {
       apiBaseUrl: trimSlash(optional(env.TURNKEY_API_URL) ?? "https://api.turnkey.com"),
@@ -146,6 +149,41 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       maxDailyDecimal: parseDecimal("WITHDRAW_MAX_DAILY_DECIMAL", env.WITHDRAW_MAX_DAILY_DECIMAL),
     },
   };
+}
+
+/** Anything an operator might leave in from an example file. */
+const PLACEHOLDER_FRAGMENTS = [
+  "change-me",
+  "changeme",
+  "change_me",
+  "placeholder",
+  "replace-me",
+  "your-api-key",
+  "example",
+];
+const MIN_API_KEY_LENGTH = 32;
+
+function parseApiKey(raw: string | undefined): string {
+  const key = required("DPM_WALLET_API_KEY", raw);
+  if (key.length < MIN_API_KEY_LENGTH) {
+    throw new Error(
+      `DPM_WALLET_API_KEY must be at least ${MIN_API_KEY_LENGTH} characters (openssl rand -hex 32)`,
+    );
+  }
+  const lower = key.toLowerCase();
+  if (PLACEHOLDER_FRAGMENTS.some((fragment) => lower.includes(fragment)) || /^(.)\1+$/.test(key)) {
+    throw new Error(
+      "DPM_WALLET_API_KEY is a placeholder; generate a real key (openssl rand -hex 32)",
+    );
+  }
+  return key;
+}
+
+function parseBoolean(name: string, raw: string | undefined): boolean {
+  const value = optional(raw)?.toLowerCase();
+  if (value === undefined || value === "false" || value === "0") return false;
+  if (value === "true" || value === "1") return true;
+  throw new Error(`${name} must be true or false`);
 }
 
 function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {

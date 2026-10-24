@@ -96,7 +96,10 @@ function translateCreateFailure(cause: unknown): DpmwError {
   const detail = cause instanceof Error ? cause.message : String(cause);
   const code = getErrorCode(cause);
   if (code && RELAYER_READ_FAILURE_CODES.has(code)) {
-    return new DpmwError("RELAYER_REQUEST_FAILED", `contract-info failed: ${detail}`, { cause });
+    return new DpmwError("RELAYER_REQUEST_FAILED", "contract-info failed", {
+      cause,
+      internal: detail,
+    });
   }
-  return new DpmwError("INTERNAL_ERROR", `signing SDK setup failed: ${detail}`, { cause });
+  return new DpmwError("INTERNAL_ERROR", "signing SDK setup failed", { cause, internal: detail });
 }

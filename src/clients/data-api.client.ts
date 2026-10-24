@@ -44,7 +44,10 @@ export class DataApiClient {
     if (!response.ok) {
       throw new DpmwError(
         "RELAYER_REQUEST_FAILED",
-        `data-api ${path} failed with ${response.status}: ${await errorText(response)}`,
+        `data-api ${path} failed with ${response.status}`,
+        {
+          internal: await errorText(response),
+        },
       );
     }
     try {

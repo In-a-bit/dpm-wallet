@@ -94,7 +94,9 @@ describe("GammaApiClient.registerCustodyUser", () => {
 
     expect(failure).toBeInstanceOf(DpmwError);
     expect((failure as DpmwError).code).toBe("DPM_REGISTRATION_REJECTED");
-    expect((failure as DpmwError).message).toContain("different account");
+    // The platform's words are kept for the log, not the response.
+    expect((failure as DpmwError).message).not.toContain("different account");
+    expect((failure as DpmwError).internal).toContain("different account");
   });
 
   it("reports a broken platform as RELAYER_REQUEST_FAILED, which is worth retrying", async () => {

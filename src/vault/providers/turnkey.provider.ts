@@ -150,7 +150,10 @@ export class TurnkeySignerProvider implements SignerProvider {
       return await run(client);
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
-      throw new DpmwError("SIGNING_FAILED", `Turnkey ${activity} failed: ${detail}`, { cause });
+      throw new DpmwError("SIGNING_FAILED", `Turnkey ${activity} failed`, {
+        cause,
+        internal: detail,
+      });
     }
   }
 

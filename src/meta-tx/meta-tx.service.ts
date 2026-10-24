@@ -228,8 +228,9 @@ function translate(cause: unknown, wallet: Wallet): unknown {
   if (cause instanceof ValidationError) return validationFailed(cause.message, fieldOf(cause));
   if (!(cause instanceof RelayerError)) return cause;
   if (mentionsUnregisteredEoa(cause)) return customerNotRegistered(wallet.ref);
-  return new DpmwError("RELAYER_REQUEST_FAILED", `relay-payload failed: ${cause.message}`, {
+  return new DpmwError("RELAYER_REQUEST_FAILED", "relay-payload failed", {
     cause,
+    internal: cause.message,
   });
 }
 

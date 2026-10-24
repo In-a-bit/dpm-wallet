@@ -71,13 +71,14 @@ export class GammaApiClient implements CustodyUserRegistrar {
     }
 
     if (!response.ok) {
-      const detail = `gamma-api ${path} failed with ${response.status}: ${await errorText(response)}`;
+      const detail = `gamma-api ${path} failed with ${response.status}`;
+      const internal = await errorText(response);
       // A refusal is a standing answer — the address belongs to another builder, this builder
       // is not a custody one, the credentials are wrong — so it is worth telling apart from a
       // platform that merely broke. Only the second is worth retrying.
       throw response.status < 500
-        ? new DpmwError("DPM_REGISTRATION_REJECTED", detail)
-        : new DpmwError("RELAYER_REQUEST_FAILED", detail);
+        ? new DpmwError("DPM_REGISTRATION_REJECTED", detail, { internal })
+        : new DpmwError("RELAYER_REQUEST_FAILED", detail, { internal });
     }
     return readCustodyUser(await parseJson(response));
   }

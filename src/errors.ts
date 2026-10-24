@@ -39,7 +39,13 @@ export const ERROR_STATUS = {
 export type ErrorCode = keyof typeof ERROR_STATUS;
 
 export type ErrorEnvelope = {
-  error: { code: ErrorCode; message: string; details?: Record<string, unknown> };
+  error: {
+    code: ErrorCode;
+    message: string;
+    details?: Record<string, unknown>;
+    /** Present when the cause is withheld from the response: quote it to find the log line. */
+    requestId?: string;
+  };
 };
 
 /**
@@ -51,25 +57,33 @@ export class DpmwError extends Error {
   readonly code: ErrorCode;
   readonly status: number;
   readonly details?: Record<string, unknown>;
+  /**
+   * What an upstream (Turnkey, relayer-api, dpm-api, gamma-api, data-api) actually said. Logged
+   * with a request id by the exception filter and never put in the response, because those
+   * bodies can carry identifiers and internals the caller has no business seeing.
+   */
+  readonly internal?: string;
 
   constructor(
     code: ErrorCode,
     message: string,
-    options?: { details?: Record<string, unknown>; cause?: unknown },
+    options?: { details?: Record<string, unknown>; cause?: unknown; internal?: string },
   ) {
     super(message, options?.cause !== undefined ? { cause: options.cause } : undefined);
     this.name = "DpmwError";
     this.code = code;
     this.status = ERROR_STATUS[code];
     if (options?.details) this.details = options.details;
+    if (options?.internal !== undefined) this.internal = options.internal;
   }
 
-  toEnvelope(): ErrorEnvelope {
+  toEnvelope(requestId?: string): ErrorEnvelope {
     return {
       error: {
         code: this.code,
         message: this.message,
         ...(this.details ? { details: this.details } : {}),
+        ...(requestId ? { requestId } : {}),
       },
     };
   }

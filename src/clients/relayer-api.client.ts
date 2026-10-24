@@ -72,13 +72,15 @@ export class RelayerApiClient {
       // it unchanged gets the same answer, so this must not read as an outage to retry.
       throw new DpmwError(
         "RELAY_REJECTED",
-        `relayer-api ${route} refused the transaction with ${response.status}: ${await errorText(response)}`,
+        `relayer-api ${route} refused the transaction with ${response.status}`,
+        { internal: await errorText(response) },
       );
     }
     if (!response.ok) {
       throw new DpmwError(
         "RELAYER_REQUEST_FAILED",
-        `relayer-api ${route} failed with ${response.status}: ${await errorText(response)}`,
+        `relayer-api ${route} failed with ${response.status}`,
+        { internal: await errorText(response) },
       );
     }
     return response;

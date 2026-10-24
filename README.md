@@ -96,7 +96,7 @@ Every route sits under `/v1` and requires `X-API-Key: $DPM_WALLET_API_KEY`, exce
 
 | Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/v1/health` | Liveness; unauthenticated |
+| `GET` | `/v1/health` | Liveness; unauthenticated returns `{status}` only, and with `X-API-Key` adds the vault detail (cached 30s) |
 | `POST` | `/v1/vault/init` | First-run Turnkey sub-organization setup; idempotent |
 | `GET` | `/v1/vault/status` | Vault mode and sub-organization name |
 | `POST` | `/v1/addresses` | Mint a wallet at the next free index |
@@ -328,7 +328,8 @@ rather than failing later on a customer's first request.
 
 | Variable | Notes |
 |---|---|
-| `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key` |
+| `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key`. At least 32 characters; placeholders such as `change-me` are refused at boot (`openssl rand -hex 32`) |
+| `ENABLE_API_DOCS` | `true` serves the OpenAPI document and Swagger UI at `/v1/docs` (unauthenticated); off by default |
 | `SIGN_RATE_LIMIT_PER_MIN` | Requests per minute shared across `/v1/sign/*` and `/v1/meta-tx/*` (429 beyond it); default `600`. In memory per process |
 | `WITHDRAW_RECIPIENT_ALLOWLIST` | Optional comma-separated addresses a `meta-tx/withdraw` (or a `redeem` with a `recipient`) may pay; empty = no restriction. Refusals answer 403 `WITHDRAW_RECIPIENT_NOT_ALLOWED` and are audited |
 | `WITHDRAW_MAX_DAILY_DECIMAL` | Optional rolling-24h ceiling on the sum of built withdrawals, summed from the audit table so a restart does not reset it. Refusals answer 403 `WITHDRAW_DAILY_LIMIT_EXCEEDED` and are audited. Counts what was signed, not what the operator later submitted |
