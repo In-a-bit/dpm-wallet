@@ -140,7 +140,7 @@ export class VaultService {
    */
   async rehydrate(): Promise<void> {
     const state = await this.vaultState.load();
-    removeLegacyPlaintextBackup(this.config.dataDir, state?.subOrgApiPublicKey);
+    removeLegacyPlaintextBackup(this.config.dataDir, state, this.encryptionKey);
     if (!state?.initialized) {
       // Also the interrupted-init case, where a key pair is reserved but no sub-organisation
       // exists yet: POST /v1/vault/init resumes it, and until then the provider stays

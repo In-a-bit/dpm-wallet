@@ -47,8 +47,8 @@ function toResponse(err: unknown): { status: number; body: unknown; code: string
   if (rejected) {
     return {
       status: rejected.status,
-      body: envelope("VALIDATION_FAILED", rejected.message),
-      code: "VALIDATION_FAILED",
+      body: envelope(rejected.code, rejected.message),
+      code: rejected.code,
     };
   }
   return {
@@ -63,13 +63,21 @@ function toResponse(err: unknown): { status: number; body: unknown; code: string
  * unsupported content encoding (415), an oversized body (413), malformed JSON (400). They are
  * the client's fault and flagged safe to show, so they keep their status instead of becoming a 500.
  */
-function bodyParserRejection(err: unknown): { status: number; message: string } | undefined {
+function bodyParserRejection(
+  err: unknown,
+): { status: number; code: ErrorCode; message: string } | undefined {
   if (!(err instanceof Error)) return undefined;
   const { status, expose } = err as Error & { status?: unknown; expose?: unknown };
   if (expose !== true || typeof status !== "number" || status < 400 || status >= 500) {
     return undefined;
   }
-  return { status, message: err.message };
+  const code: ErrorCode =
+    status === 413
+      ? "PAYLOAD_TOO_LARGE"
+      : status === 415
+        ? "UNSUPPORTED_MEDIA_TYPE"
+        : "VALIDATION_FAILED";
+  return { status, code, message: err.message };
 }
 
 function envelope(code: ErrorCode, message: string): ErrorEnvelope {

@@ -138,6 +138,8 @@ distinct situations.
 |---|---|---|
 | `UNAUTHORIZED` | 401 | Missing or wrong `X-API-Key` |
 | `VALIDATION_FAILED` | 400 | Request body or query failed schema validation |
+| `PAYLOAD_TOO_LARGE` | 413 | Request body over the 64kb cap |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | Compressed (`Content-Encoding`) request bodies are refused |
 | `VAULT_NOT_INITIALIZED` | 409 | Call `POST /v1/vault/init` first |
 | `ADDRESS_NOT_FOUND` | 404 | No wallet for that ref |
 | `REF_ALREADY_EXISTS` | 409 | That ref already has an address; refs are not reusable |

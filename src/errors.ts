@@ -7,6 +7,9 @@
 export const ERROR_STATUS = {
   UNAUTHORIZED: 401,
   VALIDATION_FAILED: 400,
+  // Raised by the body parser, before routing: an oversized or compressed request body.
+  PAYLOAD_TOO_LARGE: 413,
+  UNSUPPORTED_MEDIA_TYPE: 415,
   VAULT_NOT_INITIALIZED: 409,
   ADDRESS_NOT_FOUND: 404,
   REF_ALREADY_EXISTS: 409,

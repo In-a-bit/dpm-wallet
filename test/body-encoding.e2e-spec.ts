@@ -30,6 +30,7 @@ describe("request body encoding", () => {
       .send(gzipSync(JSON.stringify({ ref: "customer-12345" })));
 
     expect(response.status).toBe(415);
+    expect(response.body.error.code).toBe("UNSUPPORTED_MEDIA_TYPE");
   });
 
   it("still accepts a plain JSON body", async () => {
