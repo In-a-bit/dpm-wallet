@@ -85,6 +85,15 @@ export type Config = {
   };
   chainId: number;
   contracts: ContractAddresses;
+  /** Requests per minute allowed across `/v1/sign/*` and `/v1/meta-tx/*` together. */
+  signRateLimitPerMin: number;
+  /** Optional limits on where, and how much, `meta-tx/withdraw` may send. Off unless set. */
+  withdraw: {
+    /** Lower-cased recipients a withdrawal (or a redeem with a recipient) may pay. Empty = any. */
+    recipientAllowlist: ReadonlySet<string>;
+    /** Rolling 24h ceiling on the sum of built withdrawals, as a decimal string. */
+    maxDailyDecimal: string | undefined;
+  };
 };
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -124,7 +133,42 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     },
     chainId: parseChainId(env.CHAIN_ID),
     contracts: parseContracts(env),
+    signRateLimitPerMin: parsePositiveInt(
+      "SIGN_RATE_LIMIT_PER_MIN",
+      env.SIGN_RATE_LIMIT_PER_MIN,
+      600,
+    ),
+    withdraw: {
+      recipientAllowlist: parseAddressList(
+        "WITHDRAW_RECIPIENT_ALLOWLIST",
+        env.WITHDRAW_RECIPIENT_ALLOWLIST,
+      ),
+      maxDailyDecimal: parseDecimal("WITHDRAW_MAX_DAILY_DECIMAL", env.WITHDRAW_MAX_DAILY_DECIMAL),
+    },
   };
+}
+
+function parsePositiveInt(name: string, raw: string | undefined, fallback: number): number {
+  const value = Number(optional(raw) ?? fallback);
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be a positive integer`);
+  return value;
+}
+
+function parseAddressList(name: string, raw: string | undefined): ReadonlySet<string> {
+  const entries = (optional(raw) ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  return new Set(entries.map((entry) => parseAddress(name, entry).toLowerCase()));
+}
+
+function parseDecimal(name: string, raw: string | undefined): string | undefined {
+  const value = optional(raw);
+  if (value === undefined) return undefined;
+  if (!/^\d+(\.\d{1,18})?$/.test(value) || Number(value) <= 0) {
+    throw new Error(`${name} must be a positive decimal amount`);
+  }
+  return value;
 }
 
 function parseContracts(env: NodeJS.ProcessEnv): ContractAddresses {

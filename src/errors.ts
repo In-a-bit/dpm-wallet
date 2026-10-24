@@ -26,6 +26,10 @@ export const ERROR_STATUS = {
   // data-api is not configured for this install, so there is nothing to retry until it is.
   BALANCES_UNAVAILABLE: 503,
   SIGNING_FAILED: 500,
+  // The operator configured limits on withdrawals and this request is outside them; resending
+  // it unchanged is refused again (for the daily cap, until the 24h window moves on).
+  WITHDRAW_RECIPIENT_NOT_ALLOWED: 403,
+  WITHDRAW_DAILY_LIMIT_EXCEEDED: 403,
   IDEMPOTENCY_CONFLICT: 409,
   // The first request with this key is still running; retry shortly for its stored response.
   IDEMPOTENCY_IN_PROGRESS: 409,
