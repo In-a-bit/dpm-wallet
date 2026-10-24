@@ -197,7 +197,10 @@ jobs:
       # time a rollout is judged failed, the new schema may already be committed.
       # An automatic rollback would run the old image against the new schema and fail.
       # We make this hazard visible here instead of hiding it.
-      - name: Dump logs on failure
+      # The repo is public and so are its Actions logs, so this prints state, not logs: pod status,
+      # events, and only the last 50 error-level lines (the service logs JSON, one line per entry).
+      # Full logs stay in the cluster, for someone with kubectl access.
+      - name: Show pod status on failure
         if: failure() && (inputs.action == 'deploy' || inputs.action == 'update-secret')
         run: |
           echo "WARNING: this deployment migrates its schema on container start, forward-only."
@@ -205,8 +208,10 @@ jobs:
           echo "Do NOT 'kubectl rollout undo' without checking: the older image would run against the newer schema."
           for app in $INSTANCES; do
             echo "--- $app ---"
-            kubectl -n apps describe deployment $app || true
-            kubectl -n apps logs -l app=$app --all-containers=true --tail=-1 || true
+            kubectl -n apps get pods -l app=$app -o wide || true
+            kubectl -n apps get events --field-selector type!=Normal --sort-by=.lastTimestamp || true
+            kubectl -n apps logs -l app=$app --all-containers=true --tail=500 2>&1 \
+              | grep -F '"level":"error"' | tail -n 50 || true
           done
 
       - name: Perform scale action
