@@ -31,8 +31,8 @@ export type Config = {
   /** libpq connection string for the Postgres database holding every table. */
   databaseUrl: string;
   /**
-   * The mounted directory. Nothing but the plaintext API key pair backup lives here now that
-   * the database is a server rather than a file.
+   * The mounted directory. Nothing is written here; boot only looks for a legacy plaintext API
+   * key pair backup left by an older build, to delete it.
    */
   dataDir: string;
   vaultMode: VaultMode;

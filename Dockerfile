@@ -17,8 +17,8 @@
 # `docker build .` works from a clean clone with nothing beside it.
 #
 # Listens on 0.0.0.0:$PORT (8090 by default); probe GET /v1/health. Every table lives in the
-# Postgres database DATABASE_URL names; the only thing on the /data volume is the plaintext API
-# key pair backup.
+# Postgres database DATABASE_URL names; nothing is written to the /data volume;
+# it is mounted only so a plaintext API key pair backup left by an older build is removed at boot.
 #
 # Starting the container migrates the database first (see CMD). That step lives here rather than
 # in the service, so it is visible in the image and can be skipped by overriding the command —
@@ -81,9 +81,9 @@ COPY --from=builder /app/dist ./dist
 # declares no volumes of its own and never touches DATA_DIR: it was being handed a fresh anonymous
 # volume on every recreate, each one orphaned under /var/lib/docker and invisible to `docker ps`.
 #
-# The one file that lands here is a plaintext API key pair (src/vault/api-key-pair-plaintext-backup.ts,
-# mode 0600), which is the last thing that should be scattered across dangling volumes nobody knows
-# to prune. A missing mount should also fail where someone notices, rather than appear to persist.
+# Nothing is written here now, but an older build left a plaintext API key pair
+# (api-key-pair.plaintext.json, mode 0600) that boot deletes (src/vault/legacy-plaintext-backup.ts),
+# and that is the last thing that should be scattered across dangling volumes nobody knows to prune.
 #
 # So: mount /data explicitly in whatever actually needs it. `mkdir`+`chown` below is what makes the
 # path writable; VOLUME was never doing that work.

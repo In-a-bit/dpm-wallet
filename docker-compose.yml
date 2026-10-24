@@ -111,8 +111,9 @@ services:
     # The image's CMD migrates before starting; here the migrate service has already done it,
     # so the container goes straight to serving.
     command: ["node", "dist/main"]
-    # The one file left on the volume: the plaintext api-key-pair.plaintext.json backup
-    # (see src/vault/api-key-pair-plaintext-backup.ts). Every table lives in Postgres.
+    # Nothing is written here any more: every table, and the encrypted API key pair, live in
+    # Postgres. The mount stays so a plaintext api-key-pair.plaintext.json left by an older
+    # build can be removed at boot (see src/vault/legacy-plaintext-backup.ts).
     volumes: ["dpm-wallet-data:/data"]
     depends_on:
       # Implies a healthy postgres — migrate cannot have succeeded without one.

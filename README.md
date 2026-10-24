@@ -270,10 +270,12 @@ a different key tree and orphan every address already issued.
 ### Cold start
 
 Nearly all state lives in Postgres: the sub-organization credentials, the vault handle, the address
-directory, the audit trail, and idempotency records. The one thing outside it is
-`api-key-pair.plaintext.json`, an unencrypted copy of the API key pair written to `DATA_DIR` the
-moment it is confirmed to be the pair `vault_state` holds — the mounted volume exists for that file
-alone, so it survives a restart like everything in the database does. On boot the service
+directory, the audit trail, and idempotency records. The API private key is stored only encrypted
+(with `DPM_WALLET_ENCRYPTION_KEY`); no plaintext copy is written anywhere. Earlier builds left an
+unencrypted `api-key-pair.plaintext.json` in `DATA_DIR`: on boot it is deleted
+(`vault.plaintext_backup_removed`) once its public key matches the pair `vault_state` holds, and
+left in place with a `vault.plaintext_backup_kept` warning when it does not match or the database
+holds none. On boot the service
 decrypts its Turnkey credentials, reloads the vault handle, and reconciles the directory against
 the custody backend in both directions:
 
@@ -316,7 +318,7 @@ rather than failing later on a customer's first request.
 | `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key` |
 | `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept in the database. Losing it loses access to the sub-organization |
 | `DATABASE_URL` | Postgres connection string. Required — there is no default, so an install cannot silently come up against the wrong database |
-| `DATA_DIR` | The directory holding only `api-key-pair.plaintext.json`; defaults to `/data`. Both compose stacks pin it to `/data` in `environment:`, which outranks `env_file`, so a host-relative value in your `.env` (for `npm run dev`) cannot follow the service into a container — where it would resolve against `/app` and fail to write, since the service runs as a non-root user |
+| `DATA_DIR` | Holds nothing now; boot only looks there for a legacy `api-key-pair.plaintext.json` to delete. Defaults to `/data`. Both compose stacks pin it to `/data` in `environment:`, which outranks `env_file`, so a host-relative value in your `.env` (for `npm run dev`) cannot follow the service into a container — where it would resolve against `/app` and fail to write, since the service runs as a non-root user |
 | `POSTGRESQL_*` | Read by the compose `postgres` service only. The service itself uses `DATABASE_URL` |
 | `DPM_API_BASE_URL` | Where the sub-organization is created, on first initialization only. See the note on `localhost` below |
 | `RELAYER_BASE_URL` | Where meta-transactions are submitted. Same `localhost` note |
@@ -395,8 +397,8 @@ outrank `.env`; to send the container somewhere else — a shared staging deploy
 `DPM_API_BASE_URL_DOCKER` or `RELAYER_BASE_URL_DOCKER` instead of editing `.env`. The production
 stack does none of this: there, `.env` carries real hostnames and is used as written.
 
-Postgres is the one stateful piece. The `/data` volume holds only `api-key-pair.plaintext.json`,
-and the app container itself is disposable — the single-writer constraint that used to cap this
+Postgres is the one stateful piece. The `/data` volume holds nothing any more (it is mounted only so a legacy plaintext key backup
+can be removed at boot), and the app container itself is disposable — the single-writer constraint that used to cap this
 service at one replica was SQLite's, not Postgres's.
 
 `SIGTERM` stops accepting connections, lets in-flight requests finish, and drains the connection
@@ -443,7 +445,7 @@ the implementation, so each decision is recorded here instead; the wording it re
 7. **Postgres, not embedded SQLite.** The spec specifies SQLite via `better-sqlite3` on a mounted
    volume (§14), which caps the service at one replica, needs a native addon compiled against the
    runtime, and rules out network storage because it depends on POSIX advisory locking. Postgres
-   removes all three: the app container becomes stateless apart from the plaintext key pair backup,
+   removes all three: the app container becomes stateless,
    and `DATABASE_URL` replaces `DATABASE_PATH`. The schema is otherwise the same four tables — the
    `0/1` integer flags became real booleans and the ISO-8601 `text` timestamps became `timestamptz`.
 8. **TypeORM, not Drizzle.** The spec names Drizzle for the typed migrations it generates (§15.1).
