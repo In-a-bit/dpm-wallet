@@ -136,4 +136,19 @@ describe("idempotency", () => {
 
     expect(response.status).toBe(200);
   });
+
+  it("rejects an over-long Idempotency-Key with 400 and accepts one at the cap", async () => {
+    const tooLong = await harness.post("/v1/addresses", {
+      body: { ref: CUSTOMER },
+      idempotencyKey: "k".repeat(257),
+    });
+    const atCap = await harness.post("/v1/addresses", {
+      body: { ref: CUSTOMER },
+      idempotencyKey: "k".repeat(256),
+    });
+
+    expect(tooLong.status).toBe(400);
+    expect(tooLong.body.error.code).toBe("VALIDATION_FAILED");
+    expect(atCap.status).toBe(200);
+  });
 });

@@ -5,7 +5,7 @@ import { SwaggerModule } from "@nestjs/swagger";
 const CUSTOMER = "customer-12345";
 const SECRET_UPSTREAM_TEXT = "turnkey-internal-org-1234 policy denied";
 
-describe("upstream error text", () => {
+describe("upstream error text (relayer path) and API docs flag", () => {
   let harness: Harness;
   let logged: string[];
 
@@ -25,7 +25,7 @@ describe("upstream error text", () => {
     jest.restoreAllMocks();
   });
 
-  it("logs a Turnkey failure with a request id and returns only a generic message", async () => {
+  it("logs a relayer failure with a request id and returns only a generic message", async () => {
     await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
     await harness.post(`/v1/addresses/${CUSTOMER}/dpm-registered`, { body: {} });
     const original = globalThis.fetch;

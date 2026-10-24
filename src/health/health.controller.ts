@@ -1,5 +1,3 @@
-import { timingSafeEqual } from "node:crypto";
-
 import { Controller, Get, Inject, Req, Res } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
 import type { Request, Response } from "express";
@@ -7,7 +5,7 @@ import type { Request, Response } from "express";
 import { Public } from "../common/decorators/public.decorator";
 import type { Db } from "../db/client";
 import type { Config } from "../config";
-import { API_KEY_HEADER } from "../common/guards/api-key.guard";
+import { hasValidApiKey } from "../common/guards/api-key.guard";
 import { CONFIG, DB } from "../tokens";
 import { TurnkeyKeyVault } from "../vault/turnkey-vault";
 import type { VaultHealth } from "../vault/key-vault.interface";
@@ -68,10 +66,7 @@ export class HealthController {
   }
 
   private isAuthenticated(req: Request): boolean {
-    const presented = req.header(API_KEY_HEADER);
-    if (!presented) return false;
-    const given = Buffer.from(presented);
-    return given.length === this.expectedKey.length && timingSafeEqual(given, this.expectedKey);
+    return hasValidApiKey(req, this.expectedKey);
   }
 
   /**

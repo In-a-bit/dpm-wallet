@@ -32,8 +32,7 @@ export class ApiKeyGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     if (this.isPublic(context)) return true;
 
-    const presented = context.switchToHttp().getRequest<Request>().header(API_KEY_HEADER);
-    if (!presented || !constantTimeEquals(Buffer.from(presented), this.expected)) {
+    if (!hasValidApiKey(context.switchToHttp().getRequest<Request>(), this.expected)) {
       throw unauthorized();
     }
     return true;
@@ -47,6 +46,12 @@ export class ApiKeyGuard implements CanActivate {
       ]) === true
     );
   }
+}
+
+/** Whether the request presents the expected key; shared by the guard and the public health route. */
+export function hasValidApiKey(req: Request, expected: Buffer): boolean {
+  const presented = req.header(API_KEY_HEADER);
+  return presented !== undefined && constantTimeEquals(Buffer.from(presented), expected);
 }
 
 /**

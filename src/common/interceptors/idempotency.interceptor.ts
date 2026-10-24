@@ -14,11 +14,14 @@ import {
   IdempotencyRepository,
   type IdempotencyRecord,
 } from "../../db/repositories/idempotency.repo";
-import { DpmwError } from "../../errors";
+import { DpmwError, validationFailed } from "../../errors";
 import { logWarn } from "../../observability/log";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 
 export const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
+
+/** Room for the manager's `<16hex>:<callerKey>:<suffix>` over a 200-character caller key. */
+export const MAX_IDEMPOTENCY_KEY_LENGTH = 256;
 
 /**
  * Replays the stored response when a POST is retried with the same `Idempotency-Key` and the
@@ -52,6 +55,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
 
     // The concrete URL, not the route template: `/addresses/:ref/dpm-attestation` has an empty
     // body, so scoping by template would replay ref A's response (a signature) to ref B.
+    if (header.length > MAX_IDEMPOTENCY_KEY_LENGTH) {
+      throw validationFailed(
+        `${IDEMPOTENCY_KEY_HEADER} must be at most ${MAX_IDEMPOTENCY_KEY_LENGTH} characters`,
+      );
+    }
     const key = `${request.method} ${request.originalUrl}\n${header}`;
     // Hashed from the raw body: pipes transform the handler's argument, not the request, so
     // this sees exactly what the client sent, as the Express middleware did.

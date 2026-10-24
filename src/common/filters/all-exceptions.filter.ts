@@ -4,7 +4,7 @@ import { Catch, HttpException, type ArgumentsHost, type ExceptionFilter } from "
 import type { Request, Response } from "express";
 
 import { DpmwError, ERROR_STATUS, type ErrorCode, type ErrorEnvelope } from "../../errors";
-import { logError, logWarn } from "../../observability/log";
+import { logError, logWarn, redact } from "../../observability/log";
 
 /** Errors at or above this status indicate a fault here rather than a bad request. */
 const SERVER_ERROR_THRESHOLD = 500;
@@ -34,7 +34,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
       path: request.path,
       code,
       err: exception,
-      ...(requestId ? { requestId, upstream: (exception as DpmwError).internal } : {}),
+      ...(requestId ? { requestId, ...upstreamFields((exception as DpmwError).internal) } : {}),
     };
     if (status >= SERVER_ERROR_THRESHOLD) {
       logError("request.failed", context);
@@ -44,6 +44,14 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
     response.status(status).json(body);
   }
+}
+
+const MAX_UPSTREAM_LOG_CHARS = 200;
+
+/** Upstream text is free-form: capped, and passed through the logger's field redactor. */
+function upstreamFields(internal: string | undefined): Record<string, unknown> {
+  if (internal === undefined) return {};
+  return redact({ upstream: internal.slice(0, MAX_UPSTREAM_LOG_CHARS) }) as Record<string, unknown>;
 }
 
 function toResponse(
