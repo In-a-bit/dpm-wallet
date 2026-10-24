@@ -50,35 +50,59 @@ describe("idempotency", () => {
     expect(rows).toHaveLength(0);
   });
 
-  it("executes once when a duplicate arrives while the first is in flight", async () => {
+  // Empty-body route: only the URL tells the two requests apart.
+  it("does not replay one ref's response to another ref under the same key", async () => {
+    await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
+    await harness.post("/v1/addresses", { body: { ref: "customer-2" } });
+
+    const first = await harness.post(`/v1/addresses/${CUSTOMER}/dpm-attestation`, {
+      idempotencyKey: "same",
+    });
+    const second = await harness.post("/v1/addresses/customer-2/dpm-attestation", {
+      idempotencyKey: "same",
+    });
+    const replay = await harness.post(`/v1/addresses/${CUSTOMER}/dpm-attestation`, {
+      idempotencyKey: "same",
+    });
+
+    expect(second.status).toBe(200);
+    expect(second.body.address).not.toBe(first.body.address);
+    expect(replay.body).toEqual(first.body);
+  });
+
+  it("signs once when a duplicate order arrives while the first is in flight", async () => {
+    await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
+    const order = {
+      ref: CUSTOMER,
+      maker: "0x1111111111111111111111111111111111111111",
+      side: 0,
+      tokenId: "71321045679252212594626385532706912750332728571942532289631379312455583992563",
+      shares: 100,
+      price: 0.4,
+      feeRateBps: 200,
+    };
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => (release = resolve));
-    const original = harness.provider.createAccount.bind(harness.provider);
-    const createAccount = jest
-      .spyOn(harness.provider, "createAccount")
+    const original = harness.provider.signRawPayload.bind(harness.provider);
+    const signRaw = jest
+      .spyOn(harness.provider, "signRawPayload")
       .mockImplementation(async (...args) => {
         await gate;
         return original(...args);
       });
 
-    const first = harness.post("/v1/addresses", { body: { ref: CUSTOMER }, idempotencyKey: "k" });
-    while (createAccount.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 10));
-    const duplicate = await harness.post("/v1/addresses", {
-      body: { ref: CUSTOMER },
-      idempotencyKey: "k",
-    });
+    const first = harness.post("/v1/sign/order", { body: order, idempotencyKey: "k" });
+    while (signRaw.mock.calls.length === 0) await new Promise((r) => setTimeout(r, 10));
+    const duplicate = await harness.post("/v1/sign/order", { body: order, idempotencyKey: "k" });
     release();
     const settled = await first;
-    const replay = await harness.post("/v1/addresses", {
-      body: { ref: CUSTOMER },
-      idempotencyKey: "k",
-    });
+    const replay = await harness.post("/v1/sign/order", { body: order, idempotencyKey: "k" });
 
     expect(duplicate.status).toBe(409);
     expect(duplicate.body.error.code).toBe("IDEMPOTENCY_IN_PROGRESS");
     expect(settled.status).toBe(200);
     expect(replay.body).toEqual(settled.body);
-    expect(createAccount).toHaveBeenCalledTimes(1);
+    expect(signRaw).toHaveBeenCalledTimes(1);
   });
 
   it("deletes the pending row when the handler fails, so a retry runs", async () => {

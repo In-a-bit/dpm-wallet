@@ -3,6 +3,7 @@ import type { Address, Hex } from "viem";
 import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { BUILDER_API_PRIVATE_KEY_HEADER } from "../sdk/builder-key-fetch";
+import { upstreamSignal } from "./upstream-timeout";
 
 /** The platform-wide key gamma-api's global gate also accepts; see `Config["gammaApi"]`. */
 export const APP_API_KEY_HEADER = "X-API-Key";
@@ -63,6 +64,7 @@ export class GammaApiClient implements CustodyUserRegistrar {
           address: registration.address,
           signature: registration.signature,
         }),
+        signal: upstreamSignal(),
       });
     } catch (cause) {
       throw new DpmwError("RELAYER_REQUEST_FAILED", `gamma-api ${path} is unreachable`, { cause });

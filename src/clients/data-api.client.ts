@@ -1,6 +1,7 @@
 import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { platformIdentityHeaders } from "./platform-identity";
+import { upstreamSignal } from "./upstream-timeout";
 
 /** One address's collateral balance as data-api indexes it. */
 export type CollateralBalance = {
@@ -35,6 +36,7 @@ export class DataApiClient {
         method: "POST",
         headers: { "Content-Type": "application/json", ...platformIdentityHeaders(this.identity) },
         body: JSON.stringify({ users: addresses }),
+        signal: upstreamSignal(),
       });
     } catch (cause) {
       throw new DpmwError("RELAYER_REQUEST_FAILED", `data-api ${path} is unreachable`, { cause });

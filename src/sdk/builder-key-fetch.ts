@@ -1,4 +1,5 @@
 import type { FetchLike } from "@inabit-com/dpm-sdk/turnkey";
+import { upstreamSignal } from "../clients/upstream-timeout";
 
 /**
  * The header `relayer-api` resolves through `builderauth` for a builder's own backend. It
@@ -30,6 +31,6 @@ export function createBuilderKeyFetch(builderApiKey: string, actingAddress: stri
     const headers = new Headers(init.headers);
     headers.set(BUILDER_API_PRIVATE_KEY_HEADER, builderApiKey);
     headers.set(BUILDER_ADDRESS_HEADER, actingAddress);
-    return fetch(input, { ...init, headers });
+    return fetch(input, { ...init, headers, signal: init.signal ?? upstreamSignal() });
   };
 }

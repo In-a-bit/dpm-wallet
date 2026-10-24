@@ -3,6 +3,7 @@ import type { SubmitTransactionRequest } from "@inabit-com/dpm-sdk/turnkey";
 import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { platformIdentityHeaders } from "./platform-identity";
+import { upstreamSignal } from "./upstream-timeout";
 
 /**
  * The relayer-api client for submission and status. Both calls act for one signer, so the
@@ -56,6 +57,7 @@ export class RelayerApiClient {
       response = await fetch(`${this.config.baseUrl}${path}`, {
         ...init,
         headers: { ...init.headers, ...platformIdentityHeaders(this.identity, actingAddress) },
+        signal: upstreamSignal(),
       });
     } catch (cause) {
       throw new DpmwError("RELAYER_REQUEST_FAILED", `relayer-api ${route} is unreachable`, {

@@ -2,6 +2,7 @@ import type { Config } from "../config";
 import { DpmwError } from "../errors";
 import { logInfo } from "../observability/log";
 import { platformIdentityHeaders } from "./platform-identity";
+import { upstreamSignal } from "./upstream-timeout";
 
 export type CreateSubOrganizationRequest = {
   /** The compressed P-256 public key this install generated. */
@@ -60,6 +61,7 @@ export class DpmApiClient implements SubOrganizationCreator {
         method: "POST",
         headers: { "Content-Type": "application/json", ...platformIdentityHeaders(this.config) },
         body: JSON.stringify(body),
+        signal: upstreamSignal(),
       });
     } catch (cause) {
       throw new DpmwError("RELAYER_REQUEST_FAILED", `dpm-api ${path} is unreachable`, { cause });

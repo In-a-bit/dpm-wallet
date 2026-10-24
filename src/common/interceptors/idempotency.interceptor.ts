@@ -15,6 +15,7 @@ import {
   type IdempotencyRecord,
 } from "../../db/repositories/idempotency.repo";
 import { DpmwError } from "../../errors";
+import { logWarn } from "../../observability/log";
 import { IS_PUBLIC_KEY } from "../decorators/public.decorator";
 
 export const IDEMPOTENCY_KEY_HEADER = "idempotency-key";
@@ -40,12 +41,18 @@ export class IdempotencyInterceptor implements NestInterceptor {
     private readonly reflector: Reflector,
   ) {}
 
-  async intercept(context: ExecutionContext, next: CallHandler): Promise<Observable<unknown>> {
+  async intercept(
+    context: ExecutionContext,
+    next: CallHandler,
+    isRetry = false,
+  ): Promise<Observable<unknown>> {
     const request = context.switchToHttp().getRequest<Request>();
     const header = request.header(IDEMPOTENCY_KEY_HEADER)?.trim();
     if (!header || request.method !== "POST" || this.isPublic(context)) return next.handle();
 
-    const key = `${request.method} ${(request.route as { path?: string } | undefined)?.path ?? request.path}\n${header}`;
+    // The concrete URL, not the route template: `/addresses/:ref/dpm-attestation` has an empty
+    // body, so scoping by template would replay ref A's response (a signature) to ref B.
+    const key = `${request.method} ${request.originalUrl}\n${header}`;
     // Hashed from the raw body: pipes transform the handler's argument, not the request, so
     // this sees exactly what the client sent, as the Express middleware did.
     const requestHash = hashBody(request.body);
@@ -53,8 +60,11 @@ export class IdempotencyInterceptor implements NestInterceptor {
     if (!(await this.reserve(key, requestHash))) {
       const stored = await this.repository.find(key);
       // Released between the failed reserve and the read: the first request failed, so this
-      // one is simply the retry.
-      if (!stored) return this.intercept(context, next);
+      // one is simply the retry. Once only; losing the race again is reported as in progress.
+      if (!stored) {
+        if (isRetry) throw inProgress();
+        return this.intercept(context, next, true);
+      }
       return of(replayOrConflict(stored, requestHash));
     }
 
@@ -66,8 +76,15 @@ export class IdempotencyInterceptor implements NestInterceptor {
         await this.repository.complete(key, JSON.stringify(body));
         return body;
       }),
+      // The original error must survive a failed release (the stale takeover cleans up later).
+      // The converse, complete() failing after the handler's side effect, leaves the pending row
+      // to the same takeover; the caller sees a 500 and a retry is refused until it expires.
       catchError((error: unknown) =>
-        from(this.repository.release(key)).pipe(concatMap(() => throwError(() => error))),
+        from(
+          this.repository.release(key).catch((releaseError: unknown) => {
+            logWarn("idempotency.release_failed", { err: releaseError });
+          }),
+        ).pipe(concatMap(() => throwError(() => error))),
       ),
     );
   }
@@ -97,13 +114,15 @@ function replayOrConflict(stored: IdempotencyRecord, requestHash: string): unkno
       "This Idempotency-Key was used with a different request body",
     );
   }
-  if (stored.responseJson === undefined) {
-    throw new DpmwError(
-      "IDEMPOTENCY_IN_PROGRESS",
-      "A request with this Idempotency-Key is still running; retry shortly",
-    );
-  }
+  if (stored.responseJson === undefined) throw inProgress();
   return JSON.parse(stored.responseJson);
+}
+
+function inProgress(): DpmwError {
+  return new DpmwError(
+    "IDEMPOTENCY_IN_PROGRESS",
+    "A request with this Idempotency-Key is still running; retry shortly",
+  );
 }
 
 /** Hashes the parsed body so key ordering and whitespace cannot make one request look like two. */

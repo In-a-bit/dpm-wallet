@@ -7,7 +7,7 @@ import { Pool } from "pg";
  * Go services in this workspace pick up a test database.
  */
 const DEFAULT_TEST_DATABASE_URL =
-  "postgres://postgres:postgres@localhost:5440/postgres?sslmode=disable";
+  "postgres://postgres:change-me-local@localhost:5440/postgres?sslmode=disable";
 
 /** A throwaway database, and the handle that removes it again. */
 export type TestDatabase = {
