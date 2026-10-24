@@ -43,11 +43,33 @@ function toResponse(err: unknown): { status: number; body: unknown; code: string
   if (err instanceof HttpException) {
     return { status: err.getStatus(), body: err.getResponse(), code: err.name };
   }
+  const rejected = bodyParserRejection(err);
+  if (rejected) {
+    return {
+      status: rejected.status,
+      body: envelope("VALIDATION_FAILED", rejected.message),
+      code: "VALIDATION_FAILED",
+    };
+  }
   return {
     status: ERROR_STATUS.INTERNAL_ERROR,
     body: envelope("INTERNAL_ERROR", "Unexpected error"),
     code: "INTERNAL_ERROR",
   };
+}
+
+/**
+ * The body parser runs before Nest and throws http-errors rather than HttpExceptions: an
+ * unsupported content encoding (415), an oversized body (413), malformed JSON (400). They are
+ * the client's fault and flagged safe to show, so they keep their status instead of becoming a 500.
+ */
+function bodyParserRejection(err: unknown): { status: number; message: string } | undefined {
+  if (!(err instanceof Error)) return undefined;
+  const { status, expose } = err as Error & { status?: unknown; expose?: unknown };
+  if (expose !== true || typeof status !== "number" || status < 400 || status >= 500) {
+    return undefined;
+  }
+  return { status, message: err.message };
 }
 
 function envelope(code: ErrorCode, message: string): ErrorEnvelope {
