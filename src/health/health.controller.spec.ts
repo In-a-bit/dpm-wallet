@@ -59,10 +59,18 @@ describe("HealthController readiness", () => {
 });
 
 describe("HealthController vault detail", () => {
-  const HEALTH = { mode: "turnkey", initialized: true, ready: true };
+  type FakeVault = { mode: string; initializedState: object | undefined; providerReady: jest.Mock };
 
-  function controller(health: jest.Mock): HealthController {
-    return new HealthController({ health } as unknown as TurnkeyKeyVault, {} as Db, CONFIG);
+  function fakeVault(ready: jest.Mock, initialized = true): FakeVault {
+    return {
+      mode: "turnkey",
+      initializedState: initialized ? { subOrgId: "s", walletId: "w" } : undefined,
+      providerReady: ready,
+    };
+  }
+
+  function controller(vault: FakeVault): HealthController {
+    return new HealthController(vault as unknown as TurnkeyKeyVault, {} as Db, CONFIG);
   }
 
   function request(key?: string): Request {
@@ -70,41 +78,59 @@ describe("HealthController vault detail", () => {
   }
 
   it("returns only the status to an unauthenticated caller, without asking the vault", async () => {
-    const health = jest.fn().mockResolvedValue(HEALTH);
-    const sut = controller(health);
+    const ready = jest.fn().mockResolvedValue(true);
+    const sut = controller(fakeVault(ready));
 
     expect(await sut.check(request())).toEqual({ status: "ok" });
     expect(await sut.check(request("wrong"))).toEqual({ status: "ok" });
-    expect(health).not.toHaveBeenCalled();
+    expect(ready).not.toHaveBeenCalled();
   });
 
-  it("returns the vault detail to a caller with the key, looked up at most every 30s", async () => {
+  it("returns the vault detail to a caller with the key, looking Turnkey up at most every 30s", async () => {
     jest.useFakeTimers();
     try {
-      const health = jest.fn().mockResolvedValue(HEALTH);
-      const sut = controller(health);
+      const ready = jest.fn().mockResolvedValue(true);
+      const sut = controller(fakeVault(ready));
 
-      expect(await sut.check(request(KEY))).toEqual({ status: "ok", vault: HEALTH });
+      expect(await sut.check(request(KEY))).toEqual({
+        status: "ok",
+        vault: { mode: "turnkey", initialized: true, ready: true },
+      });
       await sut.check(request(KEY));
       await sut.check(request(KEY));
-      expect(health).toHaveBeenCalledTimes(1);
+      expect(ready).toHaveBeenCalledTimes(1);
 
       jest.advanceTimersByTime(30_001);
       await sut.check(request(KEY));
-      expect(health).toHaveBeenCalledTimes(2);
+      expect(ready).toHaveBeenCalledTimes(2);
     } finally {
       jest.useRealTimers();
     }
   });
 
+  it("reads `initialized` live: init a moment after a cached check shows at once", async () => {
+    const ready = jest.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const vault = fakeVault(ready, false);
+    const sut = controller(vault);
+
+    expect(await sut.check(request(KEY))).toMatchObject({
+      vault: { initialized: false, ready: false },
+    });
+    vault.initializedState = { subOrgId: "s", walletId: "w" };
+
+    expect(await sut.check(request(KEY))).toMatchObject({
+      vault: { initialized: true, ready: true },
+    });
+  });
+
   it("does not cache a failed lookup", async () => {
-    const health = jest
+    const ready = jest
       .fn()
       .mockRejectedValueOnce(new Error("turnkey down"))
-      .mockResolvedValue(HEALTH);
-    const sut = controller(health);
+      .mockResolvedValue(true);
+    const sut = controller(fakeVault(ready));
 
     await expect(sut.check(request(KEY))).rejects.toThrow("turnkey down");
-    expect(await sut.check(request(KEY))).toEqual({ status: "ok", vault: HEALTH });
+    expect(await sut.check(request(KEY))).toMatchObject({ vault: { ready: true } });
   });
 });

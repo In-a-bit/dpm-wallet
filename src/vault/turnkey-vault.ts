@@ -69,6 +69,11 @@ export class TurnkeyKeyVault implements KeyVault {
     return this.provider.listAddresses();
   }
 
+  /** Whether the custody backend answers; the one part of health worth caching. */
+  async providerReady(): Promise<boolean> {
+    return (await this.provider.health()).ready;
+  }
+
   async health(): Promise<VaultHealth> {
     const { ready } = await this.provider.health();
     return { mode: this.mode, initialized: this.state !== undefined, ready };

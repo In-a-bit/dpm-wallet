@@ -48,10 +48,18 @@ export class AllExceptionsFilter implements ExceptionFilter {
 
 const MAX_UPSTREAM_LOG_CHARS = 200;
 
-/** Upstream text is free-form: capped, and passed through the logger's field redactor. */
+/**
+ * Things that look like key material in free-form upstream text: 64-hex runs (private keys,
+ * digests), `0x` + 64-hex, and this stack's key prefixes. The logger's field redactor only works
+ * by field name, so the text itself is scrubbed here, then capped.
+ */
+const KEY_LIKE =
+  /0x[0-9a-fA-F]{64}|\b[0-9a-fA-F]{64}\b|\b(?:dpmw|dpmm|bld_sk|bld_pk)_[A-Za-z0-9_]+/g;
+
 function upstreamFields(internal: string | undefined): Record<string, unknown> {
   if (internal === undefined) return {};
-  return redact({ upstream: internal.slice(0, MAX_UPSTREAM_LOG_CHARS) }) as Record<string, unknown>;
+  const scrubbed = internal.replace(KEY_LIKE, "[redacted]").slice(0, MAX_UPSTREAM_LOG_CHARS);
+  return redact({ upstream: scrubbed }) as Record<string, unknown>;
 }
 
 function toResponse(

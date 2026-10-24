@@ -35,6 +35,16 @@ describe("dpm-wallet HTTP API", () => {
       expect(response.body.status).toBe("ok");
     });
 
+    it("shows the vault as initialised on the first health check after init", async () => {
+      const before = await harness.get("/v1/health");
+      expect(before.body.vault).toMatchObject({ initialized: false });
+
+      await harness.post("/v1/vault/init");
+      const after = await harness.get("/v1/health");
+
+      expect(after.body.vault).toMatchObject({ initialized: true, ready: true });
+    });
+
     it("serves readiness without a key, and 503 {status} when the database query throws", async () => {
       const ok = await harness.get("/v1/health/ready", { apiKey: null });
       expect(ok.status).toBe(200);

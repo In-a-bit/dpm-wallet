@@ -1,6 +1,7 @@
 import { Turnkey, type TurnkeyApiClient } from "@turnkey/sdk-server";
 import { getAddress, type Address, type Hex } from "viem";
 
+import { UPSTREAM_TIMEOUT_MS, withDeadline } from "../../clients/upstream-timeout";
 import type { Config } from "../../config";
 import { DpmwError } from "../../errors";
 import { logDebug } from "../../observability/log";
@@ -112,7 +113,11 @@ export class TurnkeySignerProvider implements SignerProvider {
   async health(): Promise<{ ready: boolean }> {
     if (!this.session) return { ready: false };
     try {
-      await this.session.client.getWhoami({ organizationId: this.session.subOrgId });
+      await withDeadline(
+        this.session.client.getWhoami({ organizationId: this.session.subOrgId }),
+        UPSTREAM_TIMEOUT_MS,
+        "Turnkey getWhoami",
+      );
       return { ready: true };
     } catch {
       return { ready: false };
@@ -147,7 +152,7 @@ export class TurnkeySignerProvider implements SignerProvider {
   ): Promise<T> {
     const { client } = this.requireSession();
     try {
-      return await run(client);
+      return await withDeadline(run(client), UPSTREAM_TIMEOUT_MS, `Turnkey ${activity}`);
     } catch (cause) {
       const detail = cause instanceof Error ? cause.message : String(cause);
       throw new DpmwError("SIGNING_FAILED", `Turnkey ${activity} failed`, {

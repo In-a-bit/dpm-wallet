@@ -28,14 +28,14 @@ const VAULT_HEALTH_TTL_MS = 30_000;
  * `/v1/health` is deliberately public, matching the prediction-gateway convention: an
  * orchestrator's probe should not need a credential. Unauthenticated callers get `{status}`
  * only; the vault detail (mode, initialised, Turnkey reachable) goes to a caller presenting the
- * API key. That detail is a cached lookup, so neither a probe nor a flood of anonymous requests
+ * API key. Turnkey's reachability in it is a cached lookup, so neither a probe nor a flood of anonymous requests
  * can drive a Turnkey call per hit.
  */
 @ApiTags("health")
 @Controller("health")
 export class HealthController {
   private readonly expectedKey: Buffer;
-  private cached: { at: number; value: Promise<VaultHealth> } | undefined;
+  private cached: { at: number; initialized: boolean; ready: Promise<boolean> } | undefined;
 
   constructor(
     private readonly vault: TurnkeyKeyVault,
@@ -52,17 +52,30 @@ export class HealthController {
     return { status: "ok", vault: await this.vaultHealth() };
   }
 
-  private vaultHealth(): Promise<VaultHealth> {
+  /**
+   * Mode and whether the vault is initialised are read live; only the reachability of Turnkey is
+   * cached. Caching `initialized` too would have `POST /v1/vault/init` followed by a health check
+   * report the vault as uninitialised for up to 30 seconds. The cached reachability is also
+   * dropped when the initialised state differs from the one it was read under, since an
+   * uninitialised vault has no session to be ready.
+   */
+  private async vaultHealth(): Promise<VaultHealth> {
+    const initialized = this.vault.initializedState !== undefined;
     const now = Date.now();
-    if (!this.cached || now - this.cached.at >= VAULT_HEALTH_TTL_MS) {
-      const value = this.vault.health();
-      this.cached = { at: now, value };
+    if (
+      !this.cached ||
+      this.cached.initialized !== initialized ||
+      now - this.cached.at >= VAULT_HEALTH_TTL_MS
+    ) {
+      const ready = this.vault.providerReady();
+      const entry = { at: now, initialized, ready };
+      this.cached = entry;
       // A failed lookup must not be served for 30 seconds.
-      value.catch(() => {
-        if (this.cached?.value === value) this.cached = undefined;
+      ready.catch(() => {
+        if (this.cached === entry) this.cached = undefined;
       });
     }
-    return this.cached.value;
+    return { mode: this.vault.mode, initialized, ready: await this.cached.ready };
   }
 
   private isAuthenticated(req: Request): boolean {

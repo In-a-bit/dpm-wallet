@@ -50,6 +50,30 @@ describe("upstream error text (relayer path) and API docs flag", () => {
     }
   });
 
+  it("scrubs key-like text from the upstream message it logs", async () => {
+    const hex = "ab".repeat(32);
+    const leaky = `org-9 rejected ${hex} and 0x${hex} for dpmw_abc123SECRET and bld_sk_xyz`;
+    await harness.post("/v1/addresses", { body: { ref: CUSTOMER } });
+    await harness.post(`/v1/addresses/${CUSTOMER}/dpm-registered`, { body: {} });
+    const original = globalThis.fetch;
+    globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("relay-payload")) return new Response(leaky, { status: 500 });
+      return original(input, init);
+    };
+    try {
+      const response = await harness.post("/v1/meta-tx/allowance", { body: { ref: CUSTOMER } });
+      const requestId = response.body.error.requestId as string;
+      const line = logged.find((entry) => entry.includes(requestId)) ?? "";
+
+      expect(line).toContain("org-9 rejected");
+      expect(line).toContain("[redacted]");
+      for (const secret of [hex, "SECRET", "bld_sk_xyz"]) expect(line).not.toContain(secret);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+
   it("mounts the API docs only when enabled", () => {
     const setup = jest.spyOn(SwaggerModule, "setup").mockImplementation(() => undefined);
 
