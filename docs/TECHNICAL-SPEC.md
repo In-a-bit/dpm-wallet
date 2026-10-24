@@ -588,6 +588,7 @@ Base path: `/v1`. All requests require the inbound `X-API-Key` header carrying `
 | `CUSTOMER_NOT_REGISTERED` | 409  | EOA not yet registered with DPM; relay-payload unavailable.                                                                        |
 | `RELAYER_UNAVAILABLE`     | 502  | `GET /relay-payload` failed.                                                                                                       |
 | `SIGNING_FAILED`          | 500  | Vault/provider signing error.                                                                                                      |
+| `IDEMPOTENCY_IN_PROGRESS` | 409  | Same idempotency key, first request still running.                                                                                 |
 | `IDEMPOTENCY_CONFLICT`    | 409  | Same idempotency key, different body.                                                                                              |
 
 
@@ -712,7 +713,7 @@ Common request shape:
 
 ### 10.8 Idempotency
 
-All `POST` signing and address-creation endpoints accept an `Idempotency-Key` header. The `dpmw` stores the key with a hash of the request body and the response; a replay with the same key and body returns the stored response, and the same key with a different body returns `IDEMPOTENCY_CONFLICT`. Address creation is additionally idempotent by derivation index.
+All `POST` signing and address-creation endpoints accept an `Idempotency-Key` header. The `dpmw` stores the key with a hash of the request body and the response; a replay with the same key and body returns the stored response, and the same key with a different body returns `IDEMPOTENCY_CONFLICT`. Keys apply to authenticated `POST` routes only and are scoped by method and route, so the same key on two routes is two requests. The key is reserved before the handler runs: a duplicate that arrives while the first is in flight gets `IDEMPOTENCY_IN_PROGRESS` (409) instead of executing twice, and a failed request releases its key so the retry runs. Address creation is additionally idempotent by derivation index.
 
 ---
 

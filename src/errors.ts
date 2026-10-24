@@ -24,6 +24,8 @@ export const ERROR_STATUS = {
   BALANCES_UNAVAILABLE: 503,
   SIGNING_FAILED: 500,
   IDEMPOTENCY_CONFLICT: 409,
+  // The first request with this key is still running; retry shortly for its stored response.
+  IDEMPOTENCY_IN_PROGRESS: 409,
   INTERNAL_ERROR: 500,
 } as const;
 

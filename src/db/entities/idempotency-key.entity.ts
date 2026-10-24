@@ -14,8 +14,9 @@ export class IdempotencyKeyEntity {
   @Column("text", { name: "request_hash" })
   requestHash!: string;
 
-  @Column("text", { name: "response_json" })
-  responseJson!: string;
+  /** NULL while the request that reserved the key is still running. */
+  @Column("text", { name: "response_json", nullable: true })
+  responseJson!: string | null;
 
   @Column("timestamptz", { name: "created_at", transformer: isoTimestamp })
   createdAt!: string;
