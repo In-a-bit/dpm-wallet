@@ -144,8 +144,6 @@ distinct situations.
 | `ADDRESS_NOT_FOUND` | 404 | No wallet for that ref |
 | `REF_ALREADY_EXISTS` | 409 | That ref already has an address; refs are not reusable |
 | `CUSTOMER_NOT_REGISTERED` | 409 | The EOA is not in the DPM `users` table yet — retry after registering |
-| `WITHDRAW_RECIPIENT_NOT_ALLOWED` | 403 | The recipient is not on `WITHDRAW_RECIPIENT_ALLOWLIST` |
-| `WITHDRAW_DAILY_LIMIT_EXCEEDED` | 403 | The withdrawal would pass `WITHDRAW_MAX_DAILY_DECIMAL` |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same `Idempotency-Key` replayed with a different body |
 | `IDEMPOTENCY_IN_PROGRESS` | 409 | The first request with this `Idempotency-Key` is still running; retry shortly |
 | `RELAYER_REQUEST_FAILED` | 502 | `GET /relay-payload` did not succeed; the cause is upstream and unknown here |
@@ -330,9 +328,6 @@ rather than failing later on a customer's first request.
 |---|---|
 | `DPM_WALLET_API_KEY` | Inbound credential the operator gateway presents as `X-API-Key`. At least 32 characters; placeholders such as `change-me` are refused at boot (`openssl rand -hex 32`) |
 | `ENABLE_API_DOCS` | `true` serves the OpenAPI document and Swagger UI at `/v1/docs` (unauthenticated); off by default |
-| `SIGN_RATE_LIMIT_PER_MIN` | Requests per minute shared across `/v1/sign/*` and `/v1/meta-tx/*` (429 beyond it); default `600`. In memory per process |
-| `WITHDRAW_RECIPIENT_ALLOWLIST` | Optional comma-separated addresses a `meta-tx/withdraw` (or a `redeem` with a `recipient`) may pay; empty = no restriction. Refusals answer 403 `WITHDRAW_RECIPIENT_NOT_ALLOWED` and are audited |
-| `WITHDRAW_MAX_DAILY_DECIMAL` | Optional rolling-24h ceiling on the sum of built withdrawals, summed from the audit table so a restart does not reset it. Refusals answer 403 `WITHDRAW_DAILY_LIMIT_EXCEEDED` and are audited. Counts what was signed, not what the operator later submitted |
 | `DPM_WALLET_ENCRYPTION_KEY` | AES-256 key (64 hex chars) for the Turnkey API private key kept in the database. Losing it loses access to the sub-organization |
 | `DATABASE_URL` | Postgres connection string. Required — there is no default, so an install cannot silently come up against the wrong database |
 | `DATA_DIR` | Holds nothing now; boot only looks there for a legacy `api-key-pair.plaintext.json` to delete. Defaults to `/data`. Both compose stacks pin it to `/data` in `environment:`, which outranks `env_file`, so a host-relative value in your `.env` (for `npm run dev`) cannot follow the service into a container — where it would resolve against `/app` and fail to write, since the service runs as a non-root user |

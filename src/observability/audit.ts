@@ -45,15 +45,6 @@ export class AuditLog {
     logInfo(entry.action, { ref: entry.ref ?? undefined, outcome: entry.outcome, ...detail });
   }
 
-  withdrawalWouldExceed(
-    since: string,
-    amount: string,
-    cap: string,
-    executor?: Executor,
-  ): Promise<{ exceeded: boolean; used: string }> {
-    return this.repository.withdrawalWouldExceed(since, amount, cap, executor);
-  }
-
   query(query: AuditQuery): Promise<AuditPage> {
     return this.repository.query(query);
   }

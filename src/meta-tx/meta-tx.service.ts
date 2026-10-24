@@ -9,7 +9,7 @@ import type { Config } from "../config";
 import type { Wallet } from "../db/repositories/wallet.repo";
 import { customerNotRegistered, DpmwError, validationFailed } from "../errors";
 import { AuditAction } from "../observability/audit-action";
-import { AuditLog, type AuditEntry } from "../observability/audit";
+import { AuditLog } from "../observability/audit";
 import { createBuilderKeyFetch } from "../sdk/builder-key-fetch";
 import { translateSigningFailure } from "../sdk/signing-failure";
 import type { SigningSdk, SigningSdkSource } from "../sdk/signing-sdk";
@@ -19,7 +19,7 @@ import {
   type MetaTxCommonParams,
   type MetaTxKind,
 } from "../sdk/wiring";
-import { CONFIG, SIGNING_SDK, TRANSACTION, type Transaction } from "../tokens";
+import { CONFIG, SIGNING_SDK } from "../tokens";
 
 export type MetaTxArgs = {
   conditionId?: string;
@@ -34,11 +34,6 @@ export type MetaTxArgs = {
  */
 const UNREGISTERED_EOA_MARKER = "user not found";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-
-/** Arbitrary constant naming the advisory lock that serialises capped withdrawals. */
-const WITHDRAW_CAP_LOCK = 7_302_024;
-
 /**
  * Builds and signs proxy meta-transactions, returning a body the operator POSTs verbatim to
  * `relayer-api`. The signing itself lives in the SDK; this service supplies the wallet, the
@@ -50,7 +45,6 @@ export class MetaTxService {
     private readonly audit: AuditLog,
     @Inject(SIGNING_SDK) private readonly sdks: SigningSdkSource,
     @Inject(CONFIG) private readonly config: Config,
-    @Inject(TRANSACTION) private readonly transaction: Transaction,
   ) {}
 
   async build(
@@ -59,105 +53,14 @@ export class MetaTxService {
     args: MetaTxArgs,
   ): Promise<SubmitTransactionRequest> {
     assertDpmRegistered(wallet);
-    await this.assertRecipientAllowed(kind, wallet, args);
-    const cap = this.config.withdraw.maxDailyDecimal;
-    if (kind === "withdraw" && cap !== undefined && args.amountDecimal !== undefined) {
-      return this.buildWithinDailyCap(wallet, args, args.amountDecimal, cap);
-    }
     const body = await this.buildThroughSdk(kind, wallet, args);
-    await this.audit.record(this.success(kind, wallet, body, args));
-    return body;
-  }
-
-  /**
-   * The check and the success row it counts against sit under one advisory lock, so two
-   * concurrent withdrawals cannot both read the same total and both pass. The lock is held
-   * across the build (bounded by the outbound deadlines); withdrawals are rare.
-   */
-  private async buildWithinDailyCap(
-    wallet: Wallet,
-    args: MetaTxArgs,
-    amount: string,
-    cap: string,
-  ): Promise<SubmitTransactionRequest> {
-    const outcome = await this.transaction(async (tx) => {
-      await tx.query("SELECT pg_advisory_xact_lock($1)", [WITHDRAW_CAP_LOCK]);
-      const since = new Date(Date.now() - DAY_MS).toISOString();
-      const { exceeded, used } = await this.audit.withdrawalWouldExceed(since, amount, cap, tx);
-      if (exceeded) {
-        await this.audit.record(
-          this.refusal("withdraw", wallet, "WITHDRAW_DAILY_LIMIT_EXCEEDED", { amount, used, cap }),
-          tx,
-        );
-        return { refused: true as const };
-      }
-      const body = await this.buildThroughSdk("withdraw", wallet, args);
-      await this.audit.record(this.success("withdraw", wallet, body, args), tx);
-      return { refused: false as const, body };
-    });
-    if (outcome.refused) {
-      throw new DpmwError(
-        "WITHDRAW_DAILY_LIMIT_EXCEEDED",
-        "This withdrawal would exceed the configured rolling 24h limit",
-      );
-    }
-    return outcome.body;
-  }
-
-  /** Applies to withdrawals, and to a redeem that pays out to a recipient. */
-  private async assertRecipientAllowed(
-    kind: MetaTxKind,
-    wallet: Wallet,
-    args: MetaTxArgs,
-  ): Promise<void> {
-    const allowed = this.config.withdraw.recipientAllowlist;
-    if (allowed.size === 0 || args.recipient === undefined) return;
-    if (kind !== "withdraw" && kind !== "redeem") return;
-    if (allowed.has(args.recipient.toLowerCase())) return;
-    await this.audit.record(
-      this.refusal(kind, wallet, "WITHDRAW_RECIPIENT_NOT_ALLOWED", { recipient: args.recipient }),
-    );
-    throw new DpmwError(
-      "WITHDRAW_RECIPIENT_NOT_ALLOWED",
-      "The recipient is not on this install's withdrawal allowlist",
-    );
-  }
-
-  private refusal(
-    kind: MetaTxKind,
-    wallet: Wallet,
-    code: string,
-    detail: Record<string, unknown>,
-  ): AuditEntry {
-    return {
-      ref: wallet.ref,
-      action: META_TX_AUDIT_ACTION[kind],
-      outcome: "failure",
-      detail: { code, ...detail },
-    };
-  }
-
-  private success(
-    kind: MetaTxKind,
-    wallet: Wallet,
-    body: SubmitTransactionRequest,
-    args: MetaTxArgs,
-  ): AuditEntry {
-    return {
+    await this.audit.record({
       ref: wallet.ref,
       action: META_TX_AUDIT_ACTION[kind],
       outcome: "success",
-      detail: {
-        from: body.from,
-        to: body.to,
-        nonce: body.nonce,
-        signature: body.signature,
-        // What the rolling daily cap sums; recorded for withdrawals only.
-        ...(kind === "withdraw"
-          ? { amountDecimal: args.amountDecimal, recipient: args.recipient }
-          : {}),
-      },
-    };
+      detail: { from: body.from, to: body.to, nonce: body.nonce, signature: body.signature },
+    });
+    return body;
   }
 
   private async buildThroughSdk(

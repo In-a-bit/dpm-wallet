@@ -1,6 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
-import { SignThrottlerGuard } from "../common/guards/sign-throttler.guard";
 import type { Address } from "viem";
 
 import { AddressesService } from "../addresses/addresses.service";
@@ -10,7 +9,7 @@ import { SignOrderDto } from "./dto/sign-order.dto";
 import { OrderSignerService, type SignedCancel, type SignedOrder } from "./order-signer.service";
 
 @ApiTags("sign")
-@UseGuards(SignThrottlerGuard, VaultInitializedGuard)
+@UseGuards(VaultInitializedGuard)
 @Controller("sign")
 export class SignController {
   constructor(

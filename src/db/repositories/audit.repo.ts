@@ -133,29 +133,6 @@ export class AuditRepository {
     };
   }
 
-  /**
-   * Whether building `amount` more would take the successful withdrawals recorded since
-   * `since` past `cap`. Summed in SQL (numeric) so no float ever touches an amount; rows
-   * recorded without an `amountDecimal` are ignored.
-   */
-  async withdrawalWouldExceed(
-    since: string,
-    amount: string,
-    cap: string,
-    executor: Executor = this.db.manager,
-  ): Promise<{ exceeded: boolean; used: string }> {
-    const rows: { used: string; exceeded: boolean }[] = await executor.query(
-      `WITH used AS (
-         SELECT COALESCE(SUM((detail::jsonb ->> 'amountDecimal')::numeric), 0) AS total
-         FROM audit_events
-         WHERE action = $1 AND outcome = 'success' AND created_at >= $2
-       )
-       SELECT total::text AS used, total + $3::numeric > $4::numeric AS exceeded FROM used`,
-      [AuditAction.MetaWithdraw, since, amount, cap],
-    );
-    return { exceeded: rows[0]?.exceeded === true, used: rows[0]?.used ?? "0" };
-  }
-
   /** Deletes one batch of routine success rows older than `before`; returns how many went. */
   async purgeRoutine(before: string, batch: number): Promise<number> {
     return this.deleteBatch(ROUTINE_SQL, [before, batch], "created_at < $2", "$3");

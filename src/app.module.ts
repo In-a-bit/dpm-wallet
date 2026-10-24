@@ -1,5 +1,4 @@
 import { Module } from "@nestjs/common";
-import { ThrottlerModule } from "@nestjs/throttler";
 import { APP_FILTER, APP_GUARD, APP_INTERCEPTOR, APP_PIPE } from "@nestjs/core";
 
 import { AddressesModule } from "./addresses/addresses.module";
@@ -8,8 +7,6 @@ import { BalancesModule } from "./balances/balances.module";
 import { AllExceptionsFilter } from "./common/filters/all-exceptions.filter";
 import { ApiKeyGuard } from "./common/guards/api-key.guard";
 import { IdempotencyInterceptor } from "./common/interceptors/idempotency.interceptor";
-import type { Config } from "./config";
-import { CONFIG } from "./tokens";
 import { createValidationPipe } from "./common/validation/validation-pipe";
 import { AppConfigModule } from "./config.module";
 import { DatabaseModule } from "./database.module";
@@ -32,13 +29,6 @@ import { VaultModule } from "./vault/vault.module";
 @Module({
   imports: [
     AppConfigModule,
-    // One shared per-minute budget for the signing routes (`ThrottlerGuard` on their controllers).
-    // In memory per process, and keyed by client address: behind the operator gateway that is
-    // one bucket, which is the point — a ceiling on what the gateway can have signed.
-    ThrottlerModule.forRootAsync({
-      inject: [CONFIG],
-      useFactory: (config: Config) => [{ ttl: 60_000, limit: config.signRateLimitPerMin }],
-    }),
     DatabaseModule,
     ObservabilityModule,
     VaultModule,

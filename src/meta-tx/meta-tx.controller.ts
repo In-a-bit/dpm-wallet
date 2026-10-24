@@ -1,7 +1,6 @@
 import type { SubmitTransactionRequest } from "@inabit-com/dpm-sdk/turnkey";
 import { Body, Controller, HttpCode, HttpStatus, Post, UseGuards } from "@nestjs/common";
 import { ApiTags } from "@nestjs/swagger";
-import { SignThrottlerGuard } from "../common/guards/sign-throttler.guard";
 
 import { AddressesService } from "../addresses/addresses.service";
 import { VaultInitializedGuard } from "../common/guards/vault-initialized.guard";
@@ -20,7 +19,7 @@ import { MetaTxService, type MetaTxArgs } from "./meta-tx.service";
  * installs that submit through this service use `/relay`.
  */
 @ApiTags("meta-tx")
-@UseGuards(SignThrottlerGuard, VaultInitializedGuard)
+@UseGuards(VaultInitializedGuard)
 @Controller("meta-tx")
 export class MetaTxController {
   constructor(
