@@ -25,12 +25,12 @@
 # `docker run … node dist/main` starts without touching the schema. Under compose the `migrate`
 # service does it instead, and the command is overridden there.
 
-# Pinned by index digest so a rebuild cannot silently pick up a different base. Dependabot (docker
-# ecosystem, .github/dependabot.yml) proposes the bumps; update the tag and digest together.
-ARG NODE_IMAGE=node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914
+# Both FROM lines below pin the base by index digest, written literally because Dependabot's
+# docker updater only recognises `FROM image:tag@sha256:…`. Dependabot (.github/dependabot.yml)
+# proposes the bumps; keep the two lines identical.
 
 # ── Stage 1: build ───────────────────────────────────────────────────────────
-FROM ${NODE_IMAGE} AS builder
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS builder
 
 WORKDIR /app
 
@@ -59,7 +59,7 @@ RUN npm run build
 RUN npm prune --omit=dev
 
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
-FROM ${NODE_IMAGE} AS runtime
+FROM node:22-alpine@sha256:fe4f6d74e20370acb04ad889077d14d0f64a9c8ea6a42bc60cddf1e844699914 AS runtime
 
 RUN apk add --no-cache tini
 
